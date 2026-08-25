@@ -1,0 +1,10 @@
+[project]
+name = "autohunt-server"
+version = "0.1.0"
+description = "autohunt backend (FastAPI) — S2a skeleton: schema + routes only, no business logic"
+requires-python = ">=3.12"
+dependencies = ["fastapi>=0.141"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

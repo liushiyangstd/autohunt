@@ -1,0 +1,10 @@
+{
+  "name": "autohunt-web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "autohunt React SPA (React 18 + Vite + TypeScript + TanStack Query) — M1 skeleton placeholder",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  }
+}

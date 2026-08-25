@@ -1,0 +1,9 @@
+[project]
+name = "autohunt-domain"
+version = "0.1.0"
+description = "SQLModel 模型 + Alembic 迁移（技术设计 §4，10 张表）— M1 skeleton placeholder"
+requires-python = ">=3.12"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
