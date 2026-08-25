@@ -7,6 +7,7 @@ dependencies = [
     "fastapi>=0.141",
     "sqlmodel>=0.0.22",
     "cryptography>=42",
+    "python-multipart>=0.0.9",
     "autohunt-domain",
 ]
 

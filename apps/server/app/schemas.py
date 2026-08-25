@@ -320,3 +320,178 @@ class ScheduleEvent(BaseModel):
 
 class ScheduleEventList(BaseModel):
     items: list[ScheduleEvent]
+
+
+# ---------- 契约 v2 增补（技设 v1.2 §3.7；全部仅 UI session，事件详情/原文除外） ----------
+# 覆盖 M3–M5 写侧：简历上传/版本管理（FR-1/2/3）、档案写（FR-2）、
+# 邮箱账户绑定/解绑/状态（FR-40/44）、事件确认/丢弃/修正（FR-42，BR-2）、
+# 通知列表（FR-32）、统计与 CSV 导出（FR-50/51/52，口径 §10.4）。
+
+
+class ResumeParseStatus(str, Enum):
+    """D-02 解析状态机；解析失败不阻塞，回退手动编辑（§12，AC-1）。"""
+
+    parsing = "解析中"
+    done = "解析完成"
+    partial = "部分字段缺失"
+    failed = "解析失败"
+
+
+class ResumeInfo(BaseModel):
+    id: str
+    name: str = Field(description="版本名，默认「简历 v{n}」，可重命名")
+    version: int = Field(description="版本号（即 profile.resume_version）")
+    is_default: bool
+    parse_status: ResumeParseStatus
+    missing_fields: list[str] = Field(default=[], description="解析缺失的必填字段名（AC-1 缺失标记）")
+    parse_error: str | None = Field(default=None, description="parse_status=解析失败 时的原因")
+    used_count: int = Field(description="引用本版本的投递数（FR-3 回溯；>0 时禁止删除）")
+    created_at: RFC3339
+
+
+class ResumeList(BaseModel):
+    items: list[ResumeInfo]
+
+
+class ResumeUpdate(BaseModel):
+    name: str | None = None
+    is_default: bool | None = Field(
+        default=None, description="传 true 将本版本设为默认简历（其余版本自动取消默认）"
+    )
+
+
+class ProfileUpdate(BaseModel):
+    """档案写（FR-2/3，D-03 显式保存）：全量替换指定简历版本的结构化档案。"""
+
+    resume_id: str
+    name: str | None = None
+    phone: str | None = None
+    email: str | None = Field(
+        default=None,
+        description="传 null/省略时按 §3.2 默认回填已绑定求职邮箱；显式传入后以用户值为准",
+    )
+    educations: list[Education] = []
+    experiences: list[Experience] = []
+    skills: list[str] = []
+    awards: list[str] = []
+    expected_city: str | None = None
+    expected_position: str | None = None
+
+
+class EmailAccountStatus(str, Enum):
+    """FR-44：auth_failed 时暂停轮询 + UI 全局警示，历史数据保留。"""
+
+    active = "active"
+    auth_failed = "auth_failed"
+
+
+class EmailAccountBind(BaseModel):
+    email: str
+    imap_host: str
+    port: int = 993
+    auth_code: str = Field(description="IMAP 授权码（OP-4）；服务端 Fernet 加密落盘，任何响应不回传")
+
+
+class EmailAccountInfo(BaseModel):
+    """永不包含授权码。"""
+
+    id: str
+    email: str
+    imap_host: str
+    port: int
+    status: EmailAccountStatus
+    last_sync_at: RFC3339 | None = None
+    created_at: RFC3339
+
+
+class EmailAccountList(BaseModel):
+    items: list[EmailAccountInfo]
+
+
+class EmailAccountTestResult(BaseModel):
+    ok: bool
+    error: str | None = Field(default=None, description="连接/认证失败原因（D-10 即时反馈）")
+
+
+class EmailAccountReauth(BaseModel):
+    auth_code: str = Field(description="新授权码；验证通过则 status 恢复 active 并续跑轮询（FR-44）")
+
+
+class EmailEventDetail(EmailEvent):
+    """事件详情 = 列表字段 + 证据区元数据（D-07，RISK-5 可回溯）。"""
+
+    email_subject: str | None = None
+    email_sender: str | None = None
+    email_received_at: RFC3339 | None = None
+
+
+class EmailEventConfirm(BaseModel):
+    """确认加入日程；任一字段均可修正（修正后加入 = 确认值取修改后值，D-07）。"""
+
+    type: EmailEventType | None = None
+    event_time: RFC3339 | None = None
+    location: str | None = None
+    meeting_link: str | None = None
+    company: str | None = None
+    matched_job_id: str | None = Field(default=None, description="关联投递的岗位；识别未命中时手动关联")
+
+
+class EmailEventConfirmResult(BaseModel):
+    event: EmailEvent
+    schedule_event: ScheduleEvent = Field(
+        description="确认后生成的日程事件（BR-2）；关联投递按 §5 以 email 来源推进状态"
+    )
+
+
+class EmailEventDiscard(BaseModel):
+    reason: str | None = Field(default=None, description="误识别反馈（KPI-2 数据源）")
+
+
+class NotificationKind(str, Enum):
+    schedule_24h = "24h"
+    schedule_1h = "1h"
+    deadline = "deadline"
+
+
+class Notification(BaseModel):
+    id: str = Field(description="日程提醒为持久 id；网申截止提醒为虚拟 id（deadline:<job_id>，§4 即时计算不落库）")
+    kind: NotificationKind
+    title: str
+    message: str | None = None
+    fire_at: RFC3339
+    schedule_event_id: str | None = None
+    application_id: str | None = Field(default=None, description="网申截止提醒对应的投递")
+
+
+class NotificationList(BaseModel):
+    items: list[Notification]
+    next_cursor: str | None = None
+
+
+class StatsOverview(BaseModel):
+    """FR-52 指标卡；筛选参数（channel/from/to）作用于全部指标（FR-51）。"""
+
+    total_applications: int = Field(description="总投递数：状态≠待投递（与 §10.4 漏斗统计范围一致）")
+    in_progress: int = Field(description="进行中：状态 ∈ {已投递, 笔试, 面试, offer}")
+    pending_items: int = Field(description="待确认事项数 = 待确认投递数 + 待确认事件数（D-01 导航红点同口径）")
+    offers: int = Field(description="offer 数：状态 ∈ {offer, 已接受}（OP-10 仅作数量记录）")
+
+
+class FunnelStage(BaseModel):
+    stage: ApplicationStatus
+    entered_count: int = Field(
+        description="进入过该状态的投递数：status_history 出现该状态或主链更后状态（去重）；待投递不计入漏斗（§10.4）"
+    )
+
+
+class FunnelConversions(BaseModel):
+    """§10.4 口径；分母为 0 时对应转化率为 null。"""
+
+    written_test_rate: float | None = Field(description="笔试转化率 = 进入笔试数 / 已投递及以后数")
+    interview_rate: float | None = Field(description="面试转化率 = 进入面试数 / 进入笔试数（无笔试环节不剔除）")
+    offer_rate: float | None = Field(description="offer 转化率 = 进入 offer 数 / 全部已投递数")
+
+
+class StatsFunnel(BaseModel):
+    stages: list[FunnelStage] = Field(description="固定四级：已投递 → 笔试 → 面试 → offer")
+    conversions: FunnelConversions

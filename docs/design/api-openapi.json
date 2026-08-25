@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "autohunt API",
-    "description": "autohunt 系统对外 API 契约（技术设计 v1.1 §3，ffaa485）。\n\n通用约定：JSON；错误统一信封 `{\"error\": {\"code\", \"message\", \"details?\"}}`；时间一律 RFC3339（UTC 存储、前端本地化展示）；列表分页 `?cursor=&limit=`（默认 50）。\n\n鉴权（§3.1）：Web UI 使用 HttpOnly Cookie session（UISession）；外部 Agent 使用 `Authorization: Bearer ah_live_<random>`（AgentBearer）。同一套路由双鉴权，中间件按凭证类型打标 caller ∈ {ui, agent} 供状态机来源裁决（BR-11）。\n\n错误码表：UNAUTHORIZED(401)、FORBIDDEN(403)、NOT_FOUND(404)、PERMIT_REQUIRED(403)/PERMIT_INVALID(403)（submit_token 缺失或无效）、STATE_CONFLICT(409)（状态机裁决拒绝）、VALIDATION_ERROR(422)。",
-    "version": "0.1.0"
+    "description": "autohunt 系统对外 API 契约（技术设计 v1.2 §3）。\n\n通用约定：JSON；错误统一信封 `{\"error\": {\"code\", \"message\", \"details?\"}}`；时间一律 RFC3339（UTC 存储、前端本地化展示）；列表分页 `?cursor=&limit=`（默认 50）。\n\n鉴权（§3.1）：Web UI 使用 HttpOnly Cookie session（UISession）；外部 Agent 使用 `Authorization: Bearer ah_live_<random>`（AgentBearer）。同一套路由双鉴权，中间件按凭证类型打标 caller ∈ {ui, agent} 供状态机来源裁决（BR-11）。\n\n错误码表：UNAUTHORIZED(401)、FORBIDDEN(403)、NOT_FOUND(404)、PERMIT_REQUIRED(403)/PERMIT_INVALID(403)（submit_token 缺失或无效）、STATE_CONFLICT(409)（状态机裁决拒绝）、VALIDATION_ERROR(422)。\n\n契约 v2 增补（技设 v1.2 §3.7，M3–M5 写侧，全部仅 UI session，事件详情只读除外）：简历上传/版本管理（/resumes，FR-1/2/3）、档案写（PUT /profile，FR-2）、邮箱账户绑定/解绑/状态/重授权（/email-accounts，FR-40/44）、事件确认/丢弃/修正与原文回溯（/events/{id}/confirm|discard|raw，FR-42/43，BR-2）、通知列表（/notifications，FR-32）、统计与 CSV 导出（/stats/*，FR-50/51/52，口径 §10.4）。既有 19 端点（v1 冻结）未变动。",
+    "version": "0.2.0"
   },
   "paths": {
     "/api/v1/keys": {
@@ -255,6 +255,81 @@
           },
           {
             "AgentBearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "profile"
+        ],
+        "summary": "保存结构化档案（FR-2/3，D-03 显式保存）",
+        "description": "全量替换指定简历版本的档案字段（§10.1 字典）。显式保存语义：不用自动保存——档案是 Agent 填表的数据源，半完成状态不应被 Agent 读到（D-03）。email 传 null/省略时按 §3.2 默认回填已绑定求职邮箱。契约 v2 骨架：本端点业务逻辑在 M3 实现。",
+        "operationId": "put_profile_api_v1_profile_put",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Profile"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND — resume_id 不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
           }
         ]
       }
@@ -1537,6 +1612,1634 @@
           }
         ]
       }
+    },
+    "/api/v1/events/{event_id}": {
+      "get": {
+        "tags": [
+          "events",
+          "schedule"
+        ],
+        "summary": "事件详情（含证据区元数据，D-07）",
+        "description": "列表字段 + 原始邮件主题/发件人/收件时间（RISK-5 可回溯）。Agent 只读可查。",
+        "operationId": "get_event_api_v1_events__event_id__get",
+        "parameters": [
+          {
+            "name": "event_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Event Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailEventDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          },
+          {
+            "AgentBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/events/{event_id}/raw": {
+      "get": {
+        "tags": [
+          "events",
+          "schedule"
+        ],
+        "summary": "原始邮件回溯（FR-43，D-07「查看原文」）",
+        "description": "原始邮件含敏感内容，仅 UI 可查（最小化暴露，RISK-3）；Agent Bearer 一律 403。",
+        "operationId": "get_event_raw_api_v1_events__event_id__raw_get",
+        "parameters": [
+          {
+            "name": "event_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Event Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "原始邮件摘录（EML headers + 正文）",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/events/{event_id}/confirm": {
+      "post": {
+        "tags": [
+          "events",
+          "schedule"
+        ],
+        "summary": "确认加入日程（BR-2；「修正后加入」共用本端点）",
+        "description": "body 中任一字段均为可选修正项，确认值取修改后值（D-07）。确认后：事件状态 → 已确认、生成 schedule_event、关联投递按 §5 以 email 来源推进状态（如 笔试/面试；回退仍被状态机拒绝）。matched_job_id 用于识别未命中时的手动关联。",
+        "operationId": "confirm_event_api_v1_events__event_id__confirm_post",
+        "parameters": [
+          {
+            "name": "event_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Event Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailEventConfirm"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailEventConfirmResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "STATE_CONFLICT — 事件非「待确认」态（重复确认/丢弃幂等拒绝）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/events/{event_id}/discard": {
+      "post": {
+        "tags": [
+          "events",
+          "schedule"
+        ],
+        "summary": "丢弃误识别事件（FR-42）",
+        "description": "事件状态 → 已丢弃，reason 作为误识别反馈留存（KPI-2 数据源）。",
+        "operationId": "discard_event_api_v1_events__event_id__discard_post",
+        "parameters": [
+          {
+            "name": "event_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Event Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailEventDiscard"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailEvent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "STATE_CONFLICT — 事件非「待确认」态（重复确认/丢弃幂等拒绝）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/resumes": {
+      "get": {
+        "tags": [
+          "resumes"
+        ],
+        "summary": "简历版本列表（D-02）",
+        "description": "按创建时间倒序；含解析状态与引用计数（used_count）。",
+        "operationId": "list_resumes_api_v1_resumes_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumeList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "resumes"
+        ],
+        "summary": "上传简历 PDF 并创建新版本（FR-1）",
+        "description": "multipart/form-data 上传（仅 .pdf，≤10MB；违规 422 VALIDATION_ERROR）。服务端同步解析为结构化档案（FR-2），解析结果以 parse_status/missing_fields/parse_error 表达；解析失败不阻塞（§12），返回 201 + parse_status=解析失败，用户进 D-03 手动补全。首个上传的版本自动设为默认。",
+        "operationId": "create_resume_api_v1_resumes_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_create_resume_api_v1_resumes_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumeInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/resumes/{resume_id}": {
+      "get": {
+        "tags": [
+          "resumes"
+        ],
+        "summary": "简历版本详情",
+        "operationId": "get_resume_api_v1_resumes__resume_id__get",
+        "parameters": [
+          {
+            "name": "resume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Resume Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumeInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "resumes"
+        ],
+        "summary": "重命名 / 设为默认版本（FR-1）",
+        "description": "is_default 传 true 将本版本设为默认（其余版本自动取消默认）。",
+        "operationId": "update_resume_api_v1_resumes__resume_id__patch",
+        "parameters": [
+          {
+            "name": "resume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Resume Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResumeUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumeInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "resumes"
+        ],
+        "summary": "删除简历版本",
+        "description": "被任一投递引用的版本不可删除（D-02 置灰口径的服务端担保）。",
+        "operationId": "delete_resume_api_v1_resumes__resume_id__delete",
+        "parameters": [
+          {
+            "name": "resume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Resume Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "STATE_CONFLICT — 已被投递引用，禁止删除（FR-3 回溯保护；details.used_count 给出引用数）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/resumes/{resume_id}/file": {
+      "get": {
+        "tags": [
+          "resumes"
+        ],
+        "summary": "下载 PDF 原件（D-02）",
+        "operationId": "get_resume_file_api_v1_resumes__resume_id__file_get",
+        "parameters": [
+          {
+            "name": "resume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Resume Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PDF 原件（Content-Disposition: attachment）",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/resumes/{resume_id}/references": {
+      "get": {
+        "tags": [
+          "resumes"
+        ],
+        "summary": "投递引用列表（FR-3，D-02「投递引用」Tab）",
+        "description": "返回使用本版本简历的投递记录，可跳岗位详情（D-05）。",
+        "operationId": "list_resume_references_api_v1_resumes__resume_id__references_get",
+        "parameters": [
+          {
+            "name": "resume_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Resume Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplicationList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/email-accounts/test": {
+      "post": {
+        "tags": [
+          "email-accounts"
+        ],
+        "summary": "测试 IMAP 连接（D-10「测试连接」）",
+        "description": "即时验证授权码与服务器连通性，不落库；失败原因在 error 字段返回（始终 200）。",
+        "operationId": "test_email_account_api_v1_email_accounts_test_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailAccountBind"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailAccountTestResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/email-accounts": {
+      "get": {
+        "tags": [
+          "email-accounts"
+        ],
+        "summary": "邮箱账户列表（含状态，FR-44）",
+        "description": "status=auth_failed 时 UI 顶部持续警示条（AC-8）；永不包含授权码。",
+        "operationId": "list_email_accounts_api_v1_email_accounts_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailAccountList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "email-accounts"
+        ],
+        "summary": "绑定求职邮箱（FR-40，OP-4 IMAP 授权码）",
+        "description": "绑定前先做连接验证：失败 → 422 VALIDATION_ERROR（统一信封，message 含原因），不创建账户。授权码 Fernet 加密落盘（§2.2 密钥存储口径），任何响应不回传。绑定成功即启动该账户轮询。",
+        "operationId": "bind_email_account_api_v1_email_accounts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailAccountBind"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailAccountInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "STATE_CONFLICT — 该邮箱已绑定",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/email-accounts/{account_id}": {
+      "patch": {
+        "tags": [
+          "email-accounts"
+        ],
+        "summary": "重授权（FR-44 恢复路径）",
+        "description": "授权失效后提交新授权码：验证通过 → status 恢复 active、续跑轮询（last_uid 保证不重不漏）；验证失败 → 422 VALIDATION_ERROR，status 保持 auth_failed。",
+        "operationId": "reauth_email_account_api_v1_email_accounts__account_id__patch",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailAccountReauth"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailAccountInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "email-accounts"
+        ],
+        "summary": "解绑并清除凭据（RISK-3）",
+        "description": "停止轮询、删除加密凭据；历史已识别事件与日程完整保留（FR-44/AC-8）。",
+        "operationId": "unbind_email_account_api_v1_email_accounts__account_id__delete",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/notifications": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "应用内通知列表（FR-32，D-01 铃铛 / D-08 提醒）",
+        "description": "合并两类来源：① 日程事件 24h/1h 两级提醒（持久化，fire_at 到达后出现）；② 网申截止提醒（按 job.deadline 即时计算不落库，§4 口径：截止前 24h/1h 窗口内、且该 job 下无「已投递」及之后状态的投递时出现；虚拟 id 形如 deadline:<job_id>）。按 fire_at 倒序，分页 ?cursor=&limit=（默认 50）。",
+        "operationId": "list_notifications_api_v1_notifications_get",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/stats/overview": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "关键指标卡（FR-52，D-01/D-09 同口径）",
+        "description": "筛选参数作用于全部指标（FR-51）。各指标口径见响应字段描述。",
+        "operationId": "get_stats_overview_api_v1_stats_overview_get",
+        "parameters": [
+          {
+            "name": "channel",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按来源渠道筛选（FR-51）",
+              "title": "Channel"
+            },
+            "description": "按来源渠道筛选（FR-51）"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "时间段起（RFC3339，按投递创建时间，FR-51）",
+              "title": "From"
+            },
+            "description": "时间段起（RFC3339，按投递创建时间，FR-51）"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "时间段止（RFC3339）",
+              "title": "To"
+            },
+            "description": "时间段止（RFC3339）"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsOverview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/stats/funnel": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "投递漏斗（FR-50，口径 §10.4，AC-7 可核对）",
+        "description": "固定四级：已投递 → 笔试 → 面试 → offer；各级 entered_count 与转化率口径见响应字段描述。「待投递」（收藏未投）不计入（§10.4）。筛选参数作用于整表（FR-51）。",
+        "operationId": "get_stats_funnel_api_v1_stats_funnel_get",
+        "parameters": [
+          {
+            "name": "channel",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按来源渠道筛选（FR-51）",
+              "title": "Channel"
+            },
+            "description": "按来源渠道筛选（FR-51）"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "时间段起（RFC3339，按投递创建时间，FR-51）",
+              "title": "From"
+            },
+            "description": "时间段起（RFC3339，按投递创建时间，FR-51）"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "时间段止（RFC3339）",
+              "title": "To"
+            },
+            "description": "时间段止（RFC3339）"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsFunnel"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/stats/export": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "台账导出 CSV（D-09 明细表导出，本地优先产品的数据可携带性）",
+        "description": "导出当前筛选条件下的投递明细；筛选参数与 funnel 一致（FR-51）。",
+        "operationId": "export_stats_csv_api_v1_stats_export_get",
+        "parameters": [
+          {
+            "name": "channel",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按来源渠道筛选（FR-51）",
+              "title": "Channel"
+            },
+            "description": "按来源渠道筛选（FR-51）"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "时间段起（RFC3339，按投递创建时间，FR-51）",
+              "title": "From"
+            },
+            "description": "时间段起（RFC3339，按投递创建时间，FR-51）"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "时间段止（RFC3339）",
+              "title": "To"
+            },
+            "description": "时间段止（RFC3339）"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "投递台账 CSV（Content-Disposition: attachment; filename=applications-export.csv；UTF-8 带 BOM 便于 Excel 打开）。列：公司/岗位名/渠道/地点/JD 链接/简历版本 ID/投递时间/当前状态/面试轮次/备注（§10.2）。",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -1810,6 +3513,33 @@
         "type": "object",
         "title": "ApplicationUpdate"
       },
+      "Body_create_resume_api_v1_resumes_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "description": "简历 PDF 原件"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "description": "版本名；缺省「简历 v{n}」"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_create_resume_api_v1_resumes_post"
+      },
       "ConfirmationClosed": {
         "properties": {
           "status": {
@@ -2050,6 +3780,152 @@
         ],
         "title": "Education"
       },
+      "EmailAccountBind": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "imap_host": {
+            "type": "string",
+            "title": "Imap Host"
+          },
+          "port": {
+            "type": "integer",
+            "title": "Port",
+            "default": 993
+          },
+          "auth_code": {
+            "type": "string",
+            "title": "Auth Code",
+            "description": "IMAP 授权码（OP-4）；服务端 Fernet 加密落盘，任何响应不回传"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "imap_host",
+          "auth_code"
+        ],
+        "title": "EmailAccountBind"
+      },
+      "EmailAccountInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "imap_host": {
+            "type": "string",
+            "title": "Imap Host"
+          },
+          "port": {
+            "type": "integer",
+            "title": "Port"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EmailAccountStatus"
+          },
+          "last_sync_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "description": "RFC3339 时间戳（UTC 存储）"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Sync At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At",
+            "description": "RFC3339 时间戳（UTC 存储）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "imap_host",
+          "port",
+          "status",
+          "created_at"
+        ],
+        "title": "EmailAccountInfo",
+        "description": "永不包含授权码。"
+      },
+      "EmailAccountList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EmailAccountInfo"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "EmailAccountList"
+      },
+      "EmailAccountReauth": {
+        "properties": {
+          "auth_code": {
+            "type": "string",
+            "title": "Auth Code",
+            "description": "新授权码；验证通过则 status 恢复 active 并续跑轮询（FR-44）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "auth_code"
+        ],
+        "title": "EmailAccountReauth"
+      },
+      "EmailAccountStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "auth_failed"
+        ],
+        "title": "EmailAccountStatus",
+        "description": "FR-44：auth_failed 时暂停轮询 + UI 全局警示，历史数据保留。"
+      },
+      "EmailAccountTestResult": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "连接/认证失败原因（D-10 即时反馈）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "title": "EmailAccountTestResult"
+      },
       "EmailEvent": {
         "properties": {
           "id": {
@@ -2134,6 +4010,237 @@
           "created_at"
         ],
         "title": "EmailEvent"
+      },
+      "EmailEventConfirm": {
+        "properties": {
+          "type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EmailEventType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "event_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "description": "RFC3339 时间戳（UTC 存储）"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Time"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "meeting_link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meeting Link"
+          },
+          "company": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company"
+          },
+          "matched_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Matched Job Id",
+            "description": "关联投递的岗位；识别未命中时手动关联"
+          }
+        },
+        "type": "object",
+        "title": "EmailEventConfirm",
+        "description": "确认加入日程；任一字段均可修正（修正后加入 = 确认值取修改后值，D-07）。"
+      },
+      "EmailEventConfirmResult": {
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/EmailEvent"
+          },
+          "schedule_event": {
+            "$ref": "#/components/schemas/ScheduleEvent",
+            "description": "确认后生成的日程事件（BR-2）；关联投递按 §5 以 email 来源推进状态"
+          }
+        },
+        "type": "object",
+        "required": [
+          "event",
+          "schedule_event"
+        ],
+        "title": "EmailEventConfirmResult"
+      },
+      "EmailEventDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "type": {
+            "$ref": "#/components/schemas/EmailEventType"
+          },
+          "event_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "description": "RFC3339 时间戳（UTC 存储）"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Time"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "meeting_link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meeting Link"
+          },
+          "company": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company"
+          },
+          "matched_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Matched Job Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EmailEventStatus"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At",
+            "description": "RFC3339 时间戳（UTC 存储）"
+          },
+          "email_subject": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email Subject"
+          },
+          "email_sender": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email Sender"
+          },
+          "email_received_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "description": "RFC3339 时间戳（UTC 存储）"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email Received At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "status",
+          "created_at"
+        ],
+        "title": "EmailEventDetail",
+        "description": "事件详情 = 列表字段 + 证据区元数据（D-07，RISK-5 可回溯）。"
+      },
+      "EmailEventDiscard": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason",
+            "description": "误识别反馈（KPI-2 数据源）"
+          }
+        },
+        "type": "object",
+        "title": "EmailEventDiscard"
       },
       "EmailEventList": {
         "properties": {
@@ -2293,6 +4400,72 @@
           "company"
         ],
         "title": "Experience"
+      },
+      "FunnelConversions": {
+        "properties": {
+          "written_test_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Written Test Rate",
+            "description": "笔试转化率 = 进入笔试数 / 已投递及以后数"
+          },
+          "interview_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interview Rate",
+            "description": "面试转化率 = 进入面试数 / 进入笔试数（无笔试环节不剔除）"
+          },
+          "offer_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Rate",
+            "description": "offer 转化率 = 进入 offer 数 / 全部已投递数"
+          }
+        },
+        "type": "object",
+        "required": [
+          "written_test_rate",
+          "interview_rate",
+          "offer_rate"
+        ],
+        "title": "FunnelConversions",
+        "description": "§10.4 口径；分母为 0 时对应转化率为 null。"
+      },
+      "FunnelStage": {
+        "properties": {
+          "stage": {
+            "$ref": "#/components/schemas/ApplicationStatus"
+          },
+          "entered_count": {
+            "type": "integer",
+            "title": "Entered Count",
+            "description": "进入过该状态的投递数：status_history 出现该状态或主链更后状态（去重）；待投递不计入漏斗（§10.4）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stage",
+          "entered_count"
+        ],
+        "title": "FunnelStage"
       },
       "HTTPValidationError": {
         "properties": {
@@ -2567,6 +4740,106 @@
         "type": "object",
         "title": "JobUpdate"
       },
+      "Notification": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "日程提醒为持久 id；网申截止提醒为虚拟 id（deadline:<job_id>，§4 即时计算不落库）"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/NotificationKind"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "fire_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Fire At",
+            "description": "RFC3339 时间戳（UTC 存储）"
+          },
+          "schedule_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Event Id"
+          },
+          "application_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Application Id",
+            "description": "网申截止提醒对应的投递"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "fire_at"
+        ],
+        "title": "Notification"
+      },
+      "NotificationKind": {
+        "type": "string",
+        "enum": [
+          "24h",
+          "1h",
+          "deadline"
+        ],
+        "title": "NotificationKind"
+      },
+      "NotificationList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Notification"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "NotificationList"
+      },
       "Profile": {
         "properties": {
           "name": {
@@ -2686,6 +4959,232 @@
         "title": "ProfileEmpty",
         "description": "无简历时的空态响应（§12，HTTP 200）。"
       },
+      "ProfileUpdate": {
+        "properties": {
+          "resume_id": {
+            "type": "string",
+            "title": "Resume Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email",
+            "description": "传 null/省略时按 §3.2 默认回填已绑定求职邮箱；显式传入后以用户值为准"
+          },
+          "educations": {
+            "items": {
+              "$ref": "#/components/schemas/Education"
+            },
+            "type": "array",
+            "title": "Educations",
+            "default": []
+          },
+          "experiences": {
+            "items": {
+              "$ref": "#/components/schemas/Experience"
+            },
+            "type": "array",
+            "title": "Experiences",
+            "default": []
+          },
+          "skills": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Skills",
+            "default": []
+          },
+          "awards": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Awards",
+            "default": []
+          },
+          "expected_city": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected City"
+          },
+          "expected_position": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Position"
+          }
+        },
+        "type": "object",
+        "required": [
+          "resume_id"
+        ],
+        "title": "ProfileUpdate",
+        "description": "档案写（FR-2/3，D-03 显式保存）：全量替换指定简历版本的结构化档案。"
+      },
+      "ResumeInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "版本名，默认「简历 v{n}」，可重命名"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "description": "版本号（即 profile.resume_version）"
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default"
+          },
+          "parse_status": {
+            "$ref": "#/components/schemas/ResumeParseStatus"
+          },
+          "missing_fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Fields",
+            "description": "解析缺失的必填字段名（AC-1 缺失标记）",
+            "default": []
+          },
+          "parse_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parse Error",
+            "description": "parse_status=解析失败 时的原因"
+          },
+          "used_count": {
+            "type": "integer",
+            "title": "Used Count",
+            "description": "引用本版本的投递数（FR-3 回溯；>0 时禁止删除）"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At",
+            "description": "RFC3339 时间戳（UTC 存储）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "version",
+          "is_default",
+          "parse_status",
+          "used_count",
+          "created_at"
+        ],
+        "title": "ResumeInfo"
+      },
+      "ResumeList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ResumeInfo"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ResumeList"
+      },
+      "ResumeParseStatus": {
+        "type": "string",
+        "enum": [
+          "解析中",
+          "解析完成",
+          "部分字段缺失",
+          "解析失败"
+        ],
+        "title": "ResumeParseStatus",
+        "description": "D-02 解析状态机；解析失败不阻塞，回退手动编辑（§12，AC-1）。"
+      },
+      "ResumeUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "is_default": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Default",
+            "description": "传 true 将本版本设为默认简历（其余版本自动取消默认）"
+          }
+        },
+        "type": "object",
+        "title": "ResumeUpdate"
+      },
       "ScheduleEvent": {
         "properties": {
           "id": {
@@ -2787,6 +5286,60 @@
           "items"
         ],
         "title": "ScheduleEventList"
+      },
+      "StatsFunnel": {
+        "properties": {
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/FunnelStage"
+            },
+            "type": "array",
+            "title": "Stages",
+            "description": "固定四级：已投递 → 笔试 → 面试 → offer"
+          },
+          "conversions": {
+            "$ref": "#/components/schemas/FunnelConversions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stages",
+          "conversions"
+        ],
+        "title": "StatsFunnel"
+      },
+      "StatsOverview": {
+        "properties": {
+          "total_applications": {
+            "type": "integer",
+            "title": "Total Applications",
+            "description": "总投递数：状态≠待投递（与 §10.4 漏斗统计范围一致）"
+          },
+          "in_progress": {
+            "type": "integer",
+            "title": "In Progress",
+            "description": "进行中：状态 ∈ {已投递, 笔试, 面试, offer}"
+          },
+          "pending_items": {
+            "type": "integer",
+            "title": "Pending Items",
+            "description": "待确认事项数 = 待确认投递数 + 待确认事件数（D-01 导航红点同口径）"
+          },
+          "offers": {
+            "type": "integer",
+            "title": "Offers",
+            "description": "offer 数：状态 ∈ {offer, 已接受}（OP-10 仅作数量记录）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total_applications",
+          "in_progress",
+          "pending_items",
+          "offers"
+        ],
+        "title": "StatsOverview",
+        "description": "FR-52 指标卡；筛选参数（channel/from/to）作用于全部指标（FR-51）。"
       },
       "SubmitResult": {
         "properties": {
@@ -2923,6 +5476,22 @@
     {
       "name": "schedule",
       "description": "日程视图（FR-43）"
+    },
+    {
+      "name": "resumes",
+      "description": "简历上传与版本管理（FR-1/2/3）——仅 UI session【契约 v2】"
+    },
+    {
+      "name": "email-accounts",
+      "description": "邮箱账户绑定/解绑/状态（FR-40/44）——仅 UI session【契约 v2】"
+    },
+    {
+      "name": "notifications",
+      "description": "应用内通知列表（FR-32）——仅 UI session【契约 v2】"
+    },
+    {
+      "name": "stats",
+      "description": "统计与 CSV 导出（FR-50/51/52，口径 §10.4）——仅 UI session【契约 v2】"
     }
   ]
 }

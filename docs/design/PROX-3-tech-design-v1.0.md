@@ -1,4 +1,4 @@
-# autohunt 技术设计 v1.1（S1a）
+# autohunt 技术设计 v1.2（S1a）
 
 > 基线：PRD-autohunt-v1.0.md（G0 基线版，Issue PROX-3 附件）。
 > 仓库现状：空仓库，无既有代码基线 —— 本文为绿地（greenfield）初始设计，"最小可行"原则体现为：单进程单体、嵌入式存储、无云依赖。
@@ -10,6 +10,7 @@
 |---|---|---|
 | v1.0 | 2026-08-25 | S1a 初版（G1 提交） |
 | v1.1 | 2026-08-25 | 按 G1 业务评审（FAIL）返工：B-1 §3.4 显式限定确认/驳回端点仅接受 UI session，"Agent 直调确认接口"入 AC-3 负例矩阵；B-2 §3.4 新增 token 过期/消耗后的「重新放行」路径（仅 UI 动作）并补验证；B-3 删除 72h 自动超时，对齐 PRD §12"持续挂起 + 手动关闭"；§5 补旁路终止态的自动来源进入规则；§4 明确网申截止提醒按 `job.deadline` 即时计算不落库；§3.2 补档案邮箱默认值逻辑 |
+| v1.2 | 2026-08-26 | 契约 v2 增补（S3b 判门后范围补齐）：新增 §3.7（简历上传/版本管理、档案写、邮箱账户绑定/解绑/状态、事件确认/丢弃/修正、通知列表、统计与 CSV 导出端点，全部仅 UI session）；§4 修正 submit_token 存储口径为 Fernet 加密落盘（裁决 §4"只存哈希"与 §3.4"GET 返回明文给 Agent"的内部矛盾，Leader 已批，与授权码同口径）；§4 补 resume 解析状态列、email_event 证据区列 |
 
 ## 1. 当前架构
 
@@ -130,18 +131,53 @@ Base URL：`http://localhost:{port}/api/v1`（默认端口 8741，可配）。
 
 FastAPI 自动生成 OpenAPI 3.1（`/openapi.json`），随仓库导出 `docs/design/api-openapi.json` 作为对外契约冻结版本；变更走 PR 评审。Agent 侧以此文件为准。
 
+### 3.7 契约 v2 增补（v1.2 新增 —— M3–M5 写侧，前端 D-02/D-03/D-07/D-10 对接依据）
+
+背景：v1 冻结的 19 端点只覆盖 M1+M2（S3b 判门时发现 M3–M5 写侧无契约可依）。本节为纯增补：既有 19 端点逐一比对未变动；新增 21 个操作（30 paths / 40 ops，info.version 0.2.0）。**除注明外，全部端点仅接受 UI session 凭证（Agent Bearer 一律 403）**——这些是人的工作台操作，外部 Agent 不需要也不应写入。
+
+**简历上传与版本管理（FR-1/2/3，D-02/D-03）**
+- `POST /resumes`（multipart，仅 .pdf ≤10MB）→ 201 `ResumeInfo`：同步解析结构化档案，结果以 `parse_status ∈ {解析中, 解析完成, 部分字段缺失, 解析失败}` + `missing_fields[]` + `parse_error` 表达；**解析失败返回 201 而非错误**（§12 不阻塞原则，回退 D-03 手动编辑）。首个上传版本自动设为默认。
+- `GET /resumes` / `GET /resumes/{id}` —— 版本列表/详情，含 `used_count`（FR-3 引用计数）。
+- `PATCH /resumes/{id}` `{name?, is_default?}` —— 重命名；is_default 传 true 设为默认（其余自动取消）。
+- `DELETE /resumes/{id}` → 204；**被投递引用时 409 STATE_CONFLICT**（FR-3 回溯保护，details.used_count 给出引用数，D-02 置灰口径的服务端担保）。
+- `GET /resumes/{id}/file` → application/pdf 原件下载；`GET /resumes/{id}/references` → 使用该版本的投递列表（D-02「投递引用」Tab）。
+- `PUT /profile` —— 档案写（FR-2）：全量替换指定简历版本的 §10.1 字段。**显式保存语义**（D-03：不用自动保存，半完成状态不应被 Agent 读到）；email 省略时按 §3.2 默认回填绑定邮箱。
+
+**邮箱账户（FR-40/44，D-10）**
+- `POST /email-accounts/test` `{email, imap_host, port, auth_code}` → `{ok, error?}`：连接预检，不落库，始终 200。
+- `POST /email-accounts` → 201：绑定前先验证连接，失败 422 不创建；授权码 Fernet 加密落盘（§2.2 口径），任何响应不回传；同邮箱重复绑定 409。绑定成功即启动轮询。
+- `GET /email-accounts` → 列表含 `status ∈ {active, auth_failed}`、`last_sync_at`（FR-44 警示条数据源，AC-8）。
+- `PATCH /email-accounts/{id}` `{auth_code}` —— 重授权：验证通过恢复 active 并续跑（last_uid 保证不重不漏）；失败 422，状态保持 auth_failed。
+- `DELETE /email-accounts/{id}` → 204：解绑并清除凭据（RISK-3）；历史事件与日程完整保留（AC-8）。
+
+**事件确认 / 丢弃 / 修正（FR-42，BR-2，D-07）**
+- `GET /events/{id}` → `EmailEventDetail`（列表字段 + email_subject/email_sender/email_received_at 证据区元数据，RISK-5 可回溯）。**本端点双鉴权**（Agent 只读，与 §3.5 一致）。
+- `GET /events/{id}/raw` → text/plain 原始邮件摘录（FR-43 回溯）。**仅 UI**：原文含敏感内容，最小化暴露（RISK-3）。
+- `POST /events/{id}/confirm` `{type?, event_time?, location?, meeting_link?, company?, matched_job_id?}` → `{event, schedule_event}`：全部字段可选即「修正后加入」（确认值取修改后值）。副作用：事件 → 已确认、生成 schedule_event（BR-2）、关联投递按 §5 以 email 来源推进状态（回退仍被状态机拒绝）。非待确认态 409。
+- `POST /events/{id}/discard` `{reason?}` → 事件 → 已丢弃，reason 留存为误识别反馈（KPI-2 数据源）。非待确认态 409。
+
+**通知列表（FR-32，D-01 铃铛）**
+- `GET /notifications?cursor=&limit=` → 合并两类来源：持久化的日程 24h/1h 提醒（fire_at 到达后出现）+ 网申截止提醒（§4 口径即时计算不落库，虚拟 id `deadline:<job_id>`）。按 fire_at 倒序。MVP 不做已读状态（红点计数走待确认投递/事件接口，见 D-01 口径）。
+
+**统计与导出（FR-50/51/52，D-09；口径 §10.4，AC-7 可核对）**
+- `GET /stats/overview?channel=&from=&to=` → 指标卡：total_applications（状态≠待投递）、in_progress（已投递/笔试/面试/offer）、pending_items（待确认投递+待确认事件，同 D-01 红点口径）、offers（offer+已接受，OP-10）。
+- `GET /stats/funnel?channel=&from=&to=` → 固定四级 已投递→笔试→面试→offer；`entered_count` = status_history 出现该级或主链更后状态的投递数（去重）；转化率按 §10.4（笔试率=进笔试/已投递及以后，面试率=进面试/进笔试，offer率=进offer/全部已投递；分母为 0 时率为 null）。筛选参数作用于整页（FR-51）。
+- `GET /stats/export?channel=&from=&to=` → text/csv 台账导出（UTF-8 带 BOM；列：公司/岗位名/渠道/地点/JD 链接/简历版本 ID/投递时间/当前状态/面试轮次/备注，§10.2）。
+
+实现落点：契约骨架随本版本入库（schema + 路由，仅鉴权闸无业务逻辑），业务实现按 §8 M3–M5 推进；`resume` / `email_event` 表新增列见 §4。
+
 ## 4. 数据模型（§10 字段字典落地，SQLite）
 
 | 表 | 关键字段 | 说明 |
 |---|---|---|
-| `resume` | id, name, file_path, is_default, created_at | PDF 原件存 `data/resumes/` |
+| `resume` | id, name, file_path, is_default, version, parse_status, missing_fields(JSON), parse_error, created_at | PDF 原件存 `data/resumes/`；parse_status ∈ 解析中/解析完成/部分字段缺失/解析失败（§3.7，D-02 解析状态机，AC-1 缺失标记） |
 | `profile` | id, resume_id(FK), name, phone, email, educations(JSON), experiences(JSON), skills(JSON), awards(JSON), expected_city, expected_position | §10.1 全字段；JSON 列存列表，查询无需 join |
 | `job` | id, company, title, jd_url, location, channel, deadline, created_at | company+title 建普通索引供重复提示（BR-3） |
 | `application` | id, job_id, resume_id, applied_at, status, interview_round, note | status 取值即 BR-10 状态集 |
 | `status_history` | id, application_id, from_status, to_status, source(ui/email/agent), created_at | FR-31 审计 |
-| `confirmation` | id, application_id, request_id(unique), fields(JSON), status, confirmed_fields(JSON), confirmed_at, submit_token_hash, token_expires_at, token_consumed, submit_result, fail_reason, created_at | §10.3；token 同样只存哈希 |
+| `confirmation` | id, application_id, request_id(unique), fields(JSON), status, confirmed_fields(JSON), confirmed_at, fields_hash, submit_token_enc, token_expires_at, token_consumed, submit_result, fail_reason, created_at | §10.3；**submit_token 采用 Fernet 加密落盘（submit_token_enc），非只存哈希**——§3.4 步骤 3 要求 GET 向 Agent 返回明文 token，只存哈希无法满足；加密与邮箱授权码同口径（§2.2 威胁模型：防文件泄露后的明文扩散）。fields_hash 为 confirmed_fields 的绑定哈希，校验时重算比对（篡改即 PERMIT_INVALID） |
 | `email_account` | id, email, imap_host, port, auth_code_enc, status(active/auth_failed), last_uid, last_sync_at | FR-40/44 |
-| `email_event` | id, account_id, message_id(unique), type(测评/笔试/面试/offer/拒信), event_time, location, meeting_link, company, matched_job_id, raw_path, status(待确认/已确认/已丢弃), created_at | raw_path 指向本地 EML 存档（FR-43 回溯） |
+| `email_event` | id, account_id, message_id(unique), type(测评/笔试/面试/offer/拒信), event_time, location, meeting_link, company, matched_job_id, raw_path, email_subject, email_sender, email_received_at, status(待确认/已确认/已丢弃), created_at | raw_path 指向本地 EML 存档（FR-43 回溯）；email_subject/sender/received_at 为 D-07 证据区元数据（§3.7，RISK-5） |
 | `schedule_event` | id, application_id, source_event_id, title, type, start_time, end_time, location, meeting_link | 确认后生成（BR-2） |
 | `notification` | id, schedule_event_id, kind(24h/1h), fire_at, status(待触发/已触发) | FR-32 |
 | `api_key` | id, name, key_hash, prefix, created_at, revoked_at, last_used_at | FR-25 |
