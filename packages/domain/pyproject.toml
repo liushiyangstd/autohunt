@@ -1,9 +1,13 @@
 [project]
 name = "autohunt-domain"
 version = "0.1.0"
-description = "SQLModel 模型 + Alembic 迁移（技术设计 §4，10 张表）— M1 skeleton placeholder"
+description = "autohunt 领域模型：SQLModel 全表（技术设计 v1.1 §4）+ SQLite 引擎"
 requires-python = ">=3.12"
+dependencies = ["sqlmodel>=0.0.22"]
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["autohunt_domain*"]

@@ -7,18 +7,30 @@
 - 挂起无自动超时（PRD §12）：仅用户手动关闭为「已超时关闭」或重开为新任务。
 """
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Request, Response, status
+from sqlmodel import select
 
+from autohunt_domain.models import Application as ApplicationRow
+from autohunt_domain.models import Confirmation as ConfirmationRow
+from autohunt_domain.models import utcnow
 from app.api.deps import ANY_CALLER, UI_ONLY
+from app.auth import any_caller, require_ui
+from app.config import get_settings
+from app.db import session_for
+from app.errors import not_found, state_conflict
 from app.schemas import (
+    ConfirmationClosed,
     ConfirmationConfirm,
     ConfirmationConfirmed,
     ConfirmationCreate,
     ConfirmationCreated,
     ConfirmationDetail,
+    ConfirmationPending,
     ConfirmationReject,
+    ConfirmationStatus,
     ErrorEnvelope,
 )
+from app.services import permits
 
 router = APIRouter(prefix="/confirmations", tags=["confirmations"])
 
@@ -32,6 +44,27 @@ AGENT_FORBIDDEN = {
         "description": "FORBIDDEN — 本端点仅接受 UI session 凭证；Agent Bearer 调用一律 403（BR-1 最后一道门，AC-3 负例）",
     }
 }
+
+
+def _to_detail(request: Request, row: ConfirmationRow) -> ConfirmationDetail:
+    settings = get_settings()
+    if row.status == ConfirmationStatus.pending.value:
+        return ConfirmationPending()
+    if row.status == ConfirmationStatus.confirmed.value:
+        token = permits.readable_token(settings.data_dir, row)
+        return ConfirmationConfirmed(
+            confirmed_fields=row.confirmed_fields or {},
+            submit_token=token,
+            expires_at=row.token_expires_at,
+        )
+    return ConfirmationClosed(status=ConfirmationStatus(row.status), reason=row.reason)
+
+
+def _get_or_404(session, confirmation_id: str) -> ConfirmationRow:
+    row = session.exec(select(ConfirmationRow).where(ConfirmationRow.id == confirmation_id)).first()
+    if row is None:
+        raise not_found("确认单不存在")
+    return row
 
 
 @router.post(
@@ -49,7 +82,34 @@ AGENT_FORBIDDEN = {
     description="提交待确认字段-值快照。**响应不携带任何可提交许可（BR-1）。**",
     openapi_extra={"security": ANY_CALLER},
 )
-def create_confirmation(body: ConfirmationCreate) -> ConfirmationCreated: ...
+def create_confirmation(
+    request: Request, response: Response, body: ConfirmationCreate
+) -> ConfirmationCreated:
+    any_caller(request)
+    with session_for(get_settings().data_dir) as session:
+        existing = session.exec(
+            select(ConfirmationRow).where(ConfirmationRow.request_id == body.request_id)
+        ).first()
+        if existing is not None:
+            # request_id 幂等命中：返回首个确认单（AC-3 异常重试路径），HTTP 200
+            response.status_code = status.HTTP_200_OK
+            return ConfirmationCreated(confirmation_id=existing.id)
+        application = session.exec(
+            select(ApplicationRow).where(ApplicationRow.id == body.application_id)
+        ).first()
+        if application is None:
+            raise not_found("投递记录不存在")
+        row = ConfirmationRow(
+            application_id=body.application_id,
+            request_id=body.request_id,
+            fields=body.fields,
+            context=body.context,
+            status=ConfirmationStatus.pending.value,
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return ConfirmationCreated(confirmation_id=row.id)
 
 
 @router.get(
@@ -65,7 +125,10 @@ def create_confirmation(body: ConfirmationCreate) -> ConfirmationCreated: ...
     ),
     openapi_extra={"security": ANY_CALLER},
 )
-def get_confirmation(confirmation_id: str) -> ConfirmationDetail: ...
+def get_confirmation(request: Request, confirmation_id: str) -> ConfirmationDetail:
+    any_caller(request)
+    with session_for(get_settings().data_dir) as session:
+        return _to_detail(request, _get_or_404(session, confirmation_id))
 
 
 @router.post(
@@ -79,7 +142,24 @@ def get_confirmation(confirmation_id: str) -> ConfirmationDetail: ...
     ),
     openapi_extra={"security": UI_ONLY},
 )
-def confirm(confirmation_id: str, body: ConfirmationConfirm) -> ConfirmationConfirmed: ...
+def confirm(request: Request, confirmation_id: str, body: ConfirmationConfirm) -> ConfirmationConfirmed:
+    require_ui(request)
+    settings = get_settings()
+    with session_for(settings.data_dir) as session:
+        row = _get_or_404(session, confirmation_id)
+        if row.status != ConfirmationStatus.pending.value:
+            raise state_conflict(f"确认单当前为「{row.status}」，仅「待确认」可执行确认")
+        row.status = ConfirmationStatus.confirmed.value
+        row.confirmed_fields = body.confirmed_fields
+        row.confirmed_at = utcnow()
+        session.add(row)
+        session.commit()
+        token, expires_at = permits.issue_token(
+            session, settings.data_dir, row, settings.submit_token_ttl_seconds
+        )
+        return ConfirmationConfirmed(
+            confirmed_fields=row.confirmed_fields, submit_token=token, expires_at=expires_at
+        )
 
 
 @router.post(
@@ -90,7 +170,18 @@ def confirm(confirmation_id: str, body: ConfirmationConfirm) -> ConfirmationConf
     description="驳回后流程终止，状态为「已驳回」。",
     openapi_extra={"security": UI_ONLY},
 )
-def reject(confirmation_id: str, body: ConfirmationReject) -> ConfirmationDetail: ...
+def reject(request: Request, confirmation_id: str, body: ConfirmationReject) -> ConfirmationDetail:
+    require_ui(request)
+    with session_for(get_settings().data_dir) as session:
+        row = _get_or_404(session, confirmation_id)
+        if row.status != ConfirmationStatus.pending.value:
+            raise state_conflict(f"确认单当前为「{row.status}」，仅「待确认」可执行驳回")
+        row.status = ConfirmationStatus.rejected.value
+        row.reason = body.reason
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return _to_detail(request, row)
 
 
 @router.post(
@@ -113,4 +204,20 @@ def reject(confirmation_id: str, body: ConfirmationReject) -> ConfirmationDetail
     ),
     openapi_extra={"security": UI_ONLY},
 )
-def reissue(confirmation_id: str) -> ConfirmationConfirmed: ...
+def reissue(request: Request, confirmation_id: str) -> ConfirmationConfirmed:
+    require_ui(request)
+    settings = get_settings()
+    with session_for(settings.data_dir) as session:
+        row = _get_or_404(session, confirmation_id)
+        if row.status != ConfirmationStatus.confirmed.value:
+            raise state_conflict(f"确认单当前为「{row.status}」，仅「已确认」可重新放行")
+        if row.submit_result == "success":
+            raise state_conflict("已回写成功的确认单不可重新放行（§3.4 步骤 5）")
+        if permits.token_active(row):
+            raise state_conflict("submit_token 仍有效，无需重新放行")
+        token, expires_at = permits.issue_token(
+            session, settings.data_dir, row, settings.submit_token_ttl_seconds
+        )
+        return ConfirmationConfirmed(
+            confirmed_fields=row.confirmed_fields or {}, submit_token=token, expires_at=expires_at
+        )

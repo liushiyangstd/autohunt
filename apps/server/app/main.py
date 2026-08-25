@@ -1,12 +1,18 @@
-"""autohunt FastAPI 骨架应用（S2a：只定义 schema 与路由，不实现业务逻辑）。
+"""autohunt FastAPI 应用（技术设计 v1.1 §3 契约的实现）。
 
-用于生成并导出 OpenAPI 3.1 冻结契约 docs/design/api-openapi.json：
+导出 OpenAPI 3.1 冻结契约 docs/design/api-openapi.json：
     python scripts/export_openapi.py
+（导出须与冻结文件零 diff；契约变更走 PR 评审，§3.6。）
+
+运行：uvicorn app.main:app --port 8741（默认端口，§3）
 """
 
 from fastapi import FastAPI
 
 from app.api import applications, confirmations, events, jobs, keys, profile
+from app.auth import AuthMiddleware
+from app.config import get_settings
+from app.errors import ApiError, api_error_handler
 
 app = FastAPI(
     title="autohunt API",
@@ -35,3 +41,11 @@ app = FastAPI(
 
 for module in (keys, profile, jobs, applications, confirmations, events):
     app.include_router(module.router, prefix="/api/v1")
+
+app.add_exception_handler(ApiError, api_error_handler)
+app.add_middleware(AuthMiddleware)
+
+if get_settings().test_hooks:
+    from app import testhooks
+
+    app.include_router(testhooks.router)
