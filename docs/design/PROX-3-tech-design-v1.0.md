@@ -1,8 +1,15 @@
-# autohunt 技术设计 v1.0（S1a）
+# autohunt 技术设计 v1.1（S1a）
 
 > 基线：PRD-autohunt-v1.0.md（G0 基线版，Issue PROX-3 附件）。
 > 仓库现状：空仓库，无既有代码基线 —— 本文为绿地（greenfield）初始设计，"最小可行"原则体现为：单进程单体、嵌入式存储、无云依赖。
 > 读者：@BackendDev @FrontendDev @Tester；判门：G1（Leader + Reviewer 业务评审）。
+
+**修订记录**
+
+| 版本 | 日期 | 变更点 |
+|---|---|---|
+| v1.0 | 2026-08-25 | S1a 初版（G1 提交） |
+| v1.1 | 2026-08-25 | 按 G1 业务评审（FAIL）返工：B-1 §3.4 显式限定确认/驳回端点仅接受 UI session，"Agent 直调确认接口"入 AC-3 负例矩阵；B-2 §3.4 新增 token 过期/消耗后的「重新放行」路径（仅 UI 动作）并补验证；B-3 删除 72h 自动超时，对齐 PRD §12"持续挂起 + 手动关闭"；§5 补旁路终止态的自动来源进入规则；§4 明确网申截止提醒按 `job.deadline` 即时计算不落库；§3.2 补档案邮箱默认值逻辑 |
 
 ## 1. 当前架构
 
@@ -73,6 +80,7 @@ Base URL：`http://localhost:{port}/api/v1`（默认端口 8741，可配）。
 - `GET /profile?resume_id={id}` → 指定简历版本的结构化档案；缺省返回默认简历版本。
 - 无简历时返回 200 + `{"empty": true}`（对应 §12 空态，Agent 可据此提示"先完善档案"）。
 - 响应字段与 §10.1 字典一一对应：`name, phone, email, educations[], experiences[], skills[], awards[], expected_city, expected_position, resume_id, resume_version`。
+- **档案邮箱默认值（§10.1 注）**：档案服务在创建/更新档案时，若 `email` 未显式填写，默认回填为当前已绑定的求职邮箱（`email_account.email`）；仅为默认值，用户可随时修改，修改后以用户值为准、不再跟随绑定邮箱变化。
 
 ### 3.3 岗位与投递读写（FR-21）
 
@@ -93,11 +101,13 @@ Base URL：`http://localhost:{port}/api/v1`（默认端口 8741，可配）。
    ```
    → 201 `{confirmation_id, status: "待确认"}`。**响应不携带任何可提交许可。**
    `request_id` 幂等去重：同一 Agent 重试返回首个 confirmation（满足 AC-3 异常重试路径要求）。
-2. **人工确认（UI）**：用户在确认界面核对字段-值快照、可修改任意值，确认或驳回。服务端记录 `confirmed_fields`（含修改后值）、`confirmed_at`，并在确认瞬间签发 **submit_token**：一次性、绑定 confirmation_id + confirmed_fields 哈希、TTL 30 分钟。
+2. **人工确认 / 驳回（UI 专属端点）**：`POST /confirmations/{id}/confirm`、`POST /confirmations/{id}/reject`。
+   **这两个端点仅接受 UI session 凭证；Agent Bearer 调用一律返回 403 `FORBIDDEN`。** 这是 BR-1 担保的最后一道门：确认动作本身 Agent 碰不到，否则 Agent 可自确认、自取 submit_token，整个许可机制失效（对应 AC-3 负例）。
+   用户在确认界面核对字段-值快照、可修改任意值后确认或驳回。服务端记录 `confirmed_fields`（含修改后值）、`confirmed_at`，并在确认瞬间签发 **submit_token**：一次性、绑定 confirmation_id + confirmed_fields 哈希、TTL 30 分钟。
 3. **查询结果**：`GET /confirmations/{id}`（Agent）
    - `待确认` → `{status}`，无其他字段；
    - `已驳回/已超时关闭` → `{status, reason?}`，流程终止；
-   - `已确认` → `{status, confirmed_fields, submit_token, expires_at}`。
+   - `已确认` → `{status, confirmed_fields, submit_token, expires_at}`（token 已过期/已消耗时 submit_token 字段为空，见步骤 5 的恢复路径）。
    **BR-1 落地：submit_token 只在已确认时出现，这是系统内唯一的"可提交许可"。**
 4. **回写提交结果**：`POST /applications/{id}/submit-result`（Agent）
    ```json
@@ -107,7 +117,8 @@ Base URL：`http://localhost:{port}/api/v1`（默认端口 8741，可配）。
    服务端校验 token（有效、未用、未过期、字段哈希一致）→ 消费 token → 成功则将投递推进 `已投递`（来源=agent），失败则记录 fail_reason 并保留字段快照（FR-24），状态留待用户人工处置（UI 提供"标记已人工投递"按钮）。
    无 token / token 无效 → 403 `PERMIT_REQUIRED` / `PERMIT_INVALID`。
    **Agent 直调 `PATCH /applications/{id}` 将状态改为 `已投递` 也必须携带 submit_token**（`Permit` 头或 body 字段），确保不存在绕过确认流的已提交路径（AC-3）。手动（UI）推进不受此限 —— 用户本人即确认者。
-5. **超时**：待确认超过 72h 未处理，前端标记"已超时关闭"（可手动关闭/重开为新任务，§12）。
+5. **token 过期/消耗后的恢复：UI「重新放行」（仅此一条路径）**：确认单处于 `已确认` 但 submit_token 已过期或已消耗（含回写失败被消耗的场景）时，确认界面提供「重新放行」按钮，调用 `POST /confirmations/{id}/reissue`（同步骤 2，**仅 UI session**）重新签发 submit_token——原 `confirmed_fields` 不变、重新绑定其哈希、重置 30 分钟 TTL。**Agent 侧不设任何换发/续期接口**：重新放行永远是人动作，与 BR-1 精神一致。已回写成功（token 正常消耗、投递已推进 `已投递`）的确认单不可重新放行。
+6. **挂起与关闭（对齐 PRD §12，无自动超时）**：待确认任务**持续挂起展示**，系统不做任何到时自动关闭；仅用户可在 UI 手动关闭（状态标记为 `已超时关闭`），或将其重开为新的确认任务。任何自动状态变更均需 PRD 授权，本设计不引入。
 
 ### 3.5 邮箱事件与日程（UI 为主，Agent 只读）
 
@@ -137,6 +148,8 @@ FastAPI 自动生成 OpenAPI 3.1（`/openapi.json`），随仓库导出 `docs/de
 
 迁移：SQLModel + Alembic；`PRAGMA journal_mode=WAL`。
 
+**网申截止提醒的实现口径（FR-32，Leader 裁决二选一已定）**：`notification` 表只承载日程事件的 24h/1h 提醒；网申截止提醒**不落库**，由提醒服务在生成通知列表时按 `job.deadline` 即时计算（截止前 24h/1h 窗口内、且该 job 下无 `已投递` 及之后状态的投递时出现）。理由：deadline 可能被用户修改，落库会产生冗余同步问题；即时计算无状态、口径单一。
+
 ## 5. 状态机实现（BR-10 / BR-11 —— 唯一裁决点，所有写路径必经）
 
 主链（rank 递增）：`待投递(0) → 已投递(1) → 笔试(2) → 面试(3) → offer(4) → 已接受/已拒绝(5)`；旁路终止态：`未通过 / 主动放弃 / 已过期`（可从任意非终态进入；进入后仅 UI 可重开为 `待投递`）。`interview_round` 为 application 字段，不单独设状态。
@@ -144,6 +157,7 @@ FastAPI 自动生成 OpenAPI 3.1（`/openapi.json`），随仓库导出 `docs/de
 裁决规则 `can_transition(current, target, source)`：
 - **UI（手动）**：允许任意合法流转，含回退（用户知情的修正）。
 - **agent / email（自动来源）**：仅允许 rank 前进；**target.rank < current.rank 一律拒绝**；target.rank == current.rank 拒绝（同态重复写入忽略为幂等成功）。即"自动来源不得回退状态"（BR-11），不仅限手动推进的 —— 简化规则对 MVP 更安全，手动永远可纠正。
+- **自动来源进入旁路终止态**：旁路终态无 rank，不受"只许前进"约束，按来源白名单限定——email 来源可进入 `未通过`/`已拒绝`（拒信、流程终止邮件识别，且须经 BR-2 人工确认后生效）；agent 来源可进入 `未通过`（如笔试/面试失败回写）。`主动放弃`、`已过期` 仅 UI 可入（前者是纯用户意图，后者由用户依据 job.deadline 判断后手动标记），自动来源写入一律 409。
 - Agent 写入 `已投递` 另需 submit_token（§3.4）。
 - 每次流转写 `status_history`（FR-31）。被拒绝的自动写入也落一条 `rejected` 标记的 history，便于 AC-6 排查。
 
@@ -186,8 +200,8 @@ FastAPI 自动生成 OpenAPI 3.1（`/openapi.json`），随仓库导出 `docs/de
 |---|---|
 | AC-1 | 集成测试：上传样例 PDF → 断言必填字段解析/缺失标记 → 手动补全保存往返 |
 | AC-2 | 端到端脚本（模拟 Agent）：建岗 → 建投递 → POST confirmation → UI（API 模拟用户）改值确认 → GET confirmation 断言返回修改后值与 submit_token |
-| AC-3 | 负例矩阵：未确认查询无 token；伪造/过期/已消费 token 回写均 403；Agent 直 PATCH 已投递无 token 被拒；同 request_id 重试返回同一确认单 |
-| AC-4 | 成功/失败两条回写路径断言台账与快照保留（FR-24） |
+| AC-3 | 负例矩阵：未确认查询无 token；伪造/过期/已消费 token 回写均 403；Agent 直 PATCH 已投递无 token 被拒；**Agent Bearer 直调 `/confirmations/{id}/confirm`、`/reject`、`/reissue` 均 403**；同 request_id 重试返回同一确认单 |
+| AC-4 | 成功/失败两条回写路径断言台账与快照保留（FR-24）；另验 **B-2 闭环**：确认后人为令 token 过期 → Agent 回写 403、查询无 token → UI「重新放行」签发新 token（confirmed_fields 不变）→ Agent 携新 token 回写成功；已回写成功的确认单调用 reissue 被拒 |
 | AC-5 | 测试夹具：本地 GreenMail/Dovecot IMAP + 模拟笔试邮件 → 断言 5 分钟内进待确认 → 确认后日程可见且关联投递 |
 | AC-6 | 状态机单测：手动推进后，email/agent 来源的回退写一律 409 且落 rejected history |
 | AC-7 | 造 10 条台账数据，漏斗接口结果与 §10.4 手工核算对拍 |
