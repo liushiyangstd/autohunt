@@ -1,4 +1,4 @@
-"""autohunt FastAPI 应用（技术设计 v1.2 §3 契约的实现 + 契约 v2 增补骨架）。
+"""autohunt FastAPI 应用（技术设计 v1.3 §3 契约的实现 + 契约 v2 增补骨架）。
 
 导出 OpenAPI 3.1 冻结契约 docs/design/api-openapi.json：
     python scripts/export_openapi.py
@@ -19,6 +19,7 @@ from app.api import (
     notifications,
     profile,
     resumes,
+    settings as settings_api,
     stats,
 )
 from app.auth import AuthMiddleware
@@ -27,9 +28,9 @@ from app.errors import ApiError, api_error_handler
 
 app = FastAPI(
     title="autohunt API",
-    version="0.2.0",
+    version="0.2.1",
     description=(
-        "autohunt 系统对外 API 契约（技术设计 v1.2 §3）。\n\n"
+        "autohunt 系统对外 API 契约（技术设计 v1.3 §3）。\n\n"
         "通用约定：JSON；错误统一信封 `{\"error\": {\"code\", \"message\", \"details?\"}}`；"
         "时间一律 RFC3339（UTC 存储、前端本地化展示）；列表分页 `?cursor=&limit=`（默认 50）。\n\n"
         "鉴权（§3.1）：Web UI 使用 HttpOnly Cookie session（UISession）；外部 Agent 使用 "
@@ -38,12 +39,18 @@ app = FastAPI(
         "错误码表：UNAUTHORIZED(401)、FORBIDDEN(403)、NOT_FOUND(404)、"
         "PERMIT_REQUIRED(403)/PERMIT_INVALID(403)（submit_token 缺失或无效）、"
         "STATE_CONFLICT(409)（状态机裁决拒绝）、VALIDATION_ERROR(422)。\n\n"
-        "契约 v2 增补（技设 v1.2 §3.7，M3–M5 写侧，全部仅 UI session，事件详情只读除外）："
+        "契约 v2 增补（技设 §3.7，M3–M5 写侧，全部仅 UI session，事件详情只读除外）："
         "简历上传/版本管理（/resumes，FR-1/2/3）、档案写（PUT /profile，FR-2）、"
         "邮箱账户绑定/解绑/状态/重授权（/email-accounts，FR-40/44）、"
         "事件确认/丢弃/修正与原文回溯（/events/{id}/confirm|discard|raw，FR-42/43，BR-2）、"
-        "通知列表（/notifications，FR-32）、统计与 CSV 导出（/stats/*，FR-50/51/52，口径 §10.4）。"
-        "既有 19 端点（v1 冻结）未变动。"
+        "通知列表（/notifications，FR-32）、统计与 CSV 导出（/stats/*，FR-50/51/52，口径 §10.4）。\n\n"
+        "契约 v2 修订（0.2.1）：确认流补 4 项——GET /confirmations 列表（仅 UI）、"
+        "GET /confirmations/{id} 待确认变体按 caller 区分（UI 返回快照，Agent 仍仅 status）、"
+        "POST /confirmations/{id}/close 手动关闭（仅 UI）、已确认响应含提交结果回写"
+        "（submit_result/fail_reason/submitted_at，FR-24）；D-05 读侧三端点"
+        "（/applications/{id}/history|confirmations|emails，FR-31/24/43）；"
+        "提醒偏好 GET/PUT /settings/reminders（仅 UI）；GET /applications 增可选 from/to 筛选。"
+        "既有 v1 冻结 19 端点语义未变动。"
     ),
     openapi_tags=[
         {"name": "keys", "description": "API key 管理（FR-25）——仅 UI session"},
@@ -57,15 +64,19 @@ app = FastAPI(
         {"name": "email-accounts", "description": "邮箱账户绑定/解绑/状态（FR-40/44）——仅 UI session【契约 v2】"},
         {"name": "notifications", "description": "应用内通知列表（FR-32）——仅 UI session【契约 v2】"},
         {"name": "stats", "description": "统计与 CSV 导出（FR-50/51/52，口径 §10.4）——仅 UI session【契约 v2】"},
+        {"name": "settings", "description": "设置（提醒偏好，FR-32 配套）——仅 UI session【契约 v2 修订】"},
     ],
 )
 
 for module in (keys, profile, jobs, applications, confirmations, events):
     app.include_router(module.router, prefix="/api/v1")
 
-# 契约 v2 增补路由（M3–M5 骨架，技设 v1.2 §3.7）
+# 契约 v2 增补路由（M3–M5 骨架，技设 §3.7）
 for module in (resumes, email_accounts, notifications, stats):
     app.include_router(module.router, prefix="/api/v1")
+
+# 契约 v2 修订路由（设置，已实现）
+app.include_router(settings_api.router, prefix="/api/v1")
 
 app.add_exception_handler(ApiError, api_error_handler)
 app.add_middleware(AuthMiddleware)

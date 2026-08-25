@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "autohunt API",
-    "description": "autohunt 系统对外 API 契约（技术设计 v1.2 §3）。\n\n通用约定：JSON；错误统一信封 `{\"error\": {\"code\", \"message\", \"details?\"}}`；时间一律 RFC3339（UTC 存储、前端本地化展示）；列表分页 `?cursor=&limit=`（默认 50）。\n\n鉴权（§3.1）：Web UI 使用 HttpOnly Cookie session（UISession）；外部 Agent 使用 `Authorization: Bearer ah_live_<random>`（AgentBearer）。同一套路由双鉴权，中间件按凭证类型打标 caller ∈ {ui, agent} 供状态机来源裁决（BR-11）。\n\n错误码表：UNAUTHORIZED(401)、FORBIDDEN(403)、NOT_FOUND(404)、PERMIT_REQUIRED(403)/PERMIT_INVALID(403)（submit_token 缺失或无效）、STATE_CONFLICT(409)（状态机裁决拒绝）、VALIDATION_ERROR(422)。\n\n契约 v2 增补（技设 v1.2 §3.7，M3–M5 写侧，全部仅 UI session，事件详情只读除外）：简历上传/版本管理（/resumes，FR-1/2/3）、档案写（PUT /profile，FR-2）、邮箱账户绑定/解绑/状态/重授权（/email-accounts，FR-40/44）、事件确认/丢弃/修正与原文回溯（/events/{id}/confirm|discard|raw，FR-42/43，BR-2）、通知列表（/notifications，FR-32）、统计与 CSV 导出（/stats/*，FR-50/51/52，口径 §10.4）。既有 19 端点（v1 冻结）未变动。",
-    "version": "0.2.0"
+    "description": "autohunt 系统对外 API 契约（技术设计 v1.3 §3）。\n\n通用约定：JSON；错误统一信封 `{\"error\": {\"code\", \"message\", \"details?\"}}`；时间一律 RFC3339（UTC 存储、前端本地化展示）；列表分页 `?cursor=&limit=`（默认 50）。\n\n鉴权（§3.1）：Web UI 使用 HttpOnly Cookie session（UISession）；外部 Agent 使用 `Authorization: Bearer ah_live_<random>`（AgentBearer）。同一套路由双鉴权，中间件按凭证类型打标 caller ∈ {ui, agent} 供状态机来源裁决（BR-11）。\n\n错误码表：UNAUTHORIZED(401)、FORBIDDEN(403)、NOT_FOUND(404)、PERMIT_REQUIRED(403)/PERMIT_INVALID(403)（submit_token 缺失或无效）、STATE_CONFLICT(409)（状态机裁决拒绝）、VALIDATION_ERROR(422)。\n\n契约 v2 增补（技设 §3.7，M3–M5 写侧，全部仅 UI session，事件详情只读除外）：简历上传/版本管理（/resumes，FR-1/2/3）、档案写（PUT /profile，FR-2）、邮箱账户绑定/解绑/状态/重授权（/email-accounts，FR-40/44）、事件确认/丢弃/修正与原文回溯（/events/{id}/confirm|discard|raw，FR-42/43，BR-2）、通知列表（/notifications，FR-32）、统计与 CSV 导出（/stats/*，FR-50/51/52，口径 §10.4）。\n\n契约 v2 修订（0.2.1）：确认流补 4 项——GET /confirmations 列表（仅 UI）、GET /confirmations/{id} 待确认变体按 caller 区分（UI 返回快照，Agent 仍仅 status）、POST /confirmations/{id}/close 手动关闭（仅 UI）、已确认响应含提交结果回写（submit_result/fail_reason/submitted_at，FR-24）；D-05 读侧三端点（/applications/{id}/history|confirmations|emails，FR-31/24/43）；提醒偏好 GET/PUT /settings/reminders（仅 UI）；GET /applications 增可选 from/to 筛选。既有 v1 冻结 19 端点语义未变动。",
+    "version": "0.2.1"
   },
   "paths": {
     "/api/v1/keys": {
@@ -691,7 +691,7 @@
           "applications"
         ],
         "summary": "投递列表（看板数据源，FR-12）",
-        "description": "筛选：status / company / channel；分页 ?cursor=&limit=（默认 50）。",
+        "description": "筛选：status / company / channel；分页 ?cursor=&limit=（默认 50）。契约 v2 修订：新增可选 from/to（RFC3339）按投递时间 applied_at 过滤（D-09 明细表时间段筛选，FR-51）；applied_at 为空（尚未投递）的记录在指定 from/to 时不返回。",
         "operationId": "list_applications_api_v1_applications_get",
         "parameters": [
           {
@@ -741,6 +741,42 @@
               ],
               "title": "Channel"
             }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "投递时间起（RFC3339，按 applied_at）",
+              "title": "From"
+            },
+            "description": "投递时间起（RFC3339，按 applied_at）"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "投递时间止（RFC3339，按 applied_at）",
+              "title": "To"
+            },
+            "description": "投递时间止（RFC3339，按 applied_at）"
           },
           {
             "name": "cursor",
@@ -1018,6 +1054,219 @@
         ]
       }
     },
+    "/api/v1/applications/{application_id}/history": {
+      "get": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "状态历史（FR-31，D-05 状态历史 Tab）【契约 v2 修订】",
+        "description": "按时间正序返回该投递的全部 status_history 记录（含 source 与 rejected 标记，被拒绝的自动写入也可查，AC-6 排查）。",
+        "operationId": "get_application_history_api_v1_applications__application_id__history_get",
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Application Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusHistoryList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          },
+          {
+            "AgentBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/applications/{application_id}/confirmations": {
+      "get": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "确认记录（FR-22/24，D-05 确认记录 Tab）【契约 v2 修订】",
+        "description": "返回该投递关联的全部确认单（状态、确认时间、提交结果回写），按创建时间正序。",
+        "operationId": "get_application_confirmations_api_v1_applications__application_id__confirmations_get",
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Application Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmationRecordList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          },
+          {
+            "AgentBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/applications/{application_id}/emails": {
+      "get": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "关联邮件回溯（FR-43，D-05 邮件 Tab）【契约 v2 修订】",
+        "description": "返回识别匹配到该投递所属岗位（matched_job_id = application.job_id）的全部邮箱事件，含证据区元数据（主题/发件人/收件时间，RISK-5）。按识别时间正序。",
+        "operationId": "get_application_emails_api_v1_applications__application_id__emails_get",
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Application Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailEventDetailList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          },
+          {
+            "AgentBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/confirmations": {
       "post": {
         "tags": [
@@ -1027,14 +1276,14 @@
         "description": "提交待确认字段-值快照。**响应不携带任何可提交许可（BR-1）。**",
         "operationId": "create_confirmation_api_v1_confirmations_post",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ConfirmationCreate"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "201": {
@@ -1086,6 +1335,105 @@
             "AgentBearer": []
           }
         ]
+      },
+      "get": {
+        "tags": [
+          "confirmations"
+        ],
+        "summary": "确认单列表（仅 UI，D-01 待确认分组/红点数据源）【契约 v2 修订】",
+        "description": "返回确认单摘要列表（不含字段快照，快照走 GET /{id} 的 UI 变体）。筛选：status；分页 ?cursor=&limit=（默认 50）。Agent Bearer 一律 403。",
+        "operationId": "list_confirmations_api_v1_confirmations_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ConfirmationStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmationList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证；Agent Bearer 调用一律 403（BR-1 最后一道门，AC-3 负例）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
       }
     },
     "/api/v1/confirmations/{confirmation_id}": {
@@ -1094,7 +1442,7 @@
           "confirmations"
         ],
         "summary": "查询确认结果（Agent 轮询）",
-        "description": "按状态返回不同载荷：待确认 → 仅 status；已驳回/已超时关闭 → status + reason?，流程终止；已确认 → status + confirmed_fields + submit_token + expires_at（token 过期/已消耗时 submit_token 为 null，走 UI「重新放行」恢复）。**BR-1 落地：submit_token 只在已确认时出现。**",
+        "description": "按状态与 caller 返回不同载荷：待确认 → Agent 仅 {status}，UI session 返回字段-值快照（fields + context，D-06 对照表，契约 v2 修订）；已驳回/已超时关闭 → status + reason?，流程终止；已确认 → status + confirmed_fields + submit_token + expires_at + 提交结果回写（submit_result / fail_reason / submitted_at，FR-24 结果视图）（token 过期/已消耗时 submit_token 为 null，走 UI「重新放行」恢复）。**BR-1 落地：submit_token 只在已确认时出现。**",
         "operationId": "get_confirmation_api_v1_confirmations__confirmation_id__get",
         "parameters": [
           {
@@ -1116,6 +1464,9 @@
                   "anyOf": [
                     {
                       "$ref": "#/components/schemas/ConfirmationPending"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ConfirmationPendingUI"
                     },
                     {
                       "$ref": "#/components/schemas/ConfirmationConfirmed"
@@ -1298,6 +1649,9 @@
                       "$ref": "#/components/schemas/ConfirmationPending"
                     },
                     {
+                      "$ref": "#/components/schemas/ConfirmationPendingUI"
+                    },
+                    {
                       "$ref": "#/components/schemas/ConfirmationConfirmed"
                     },
                     {
@@ -1419,6 +1773,125 @@
           },
           "409": {
             "description": "STATE_CONFLICT — 确认单非「已确认」态、token 仍有效，或已回写成功（不可重新放行）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/confirmations/{confirmation_id}/close": {
+      "post": {
+        "tags": [
+          "confirmations"
+        ],
+        "summary": "手动关闭确认任务（仅 UI）【契约 v2 修订】",
+        "description": "挂起无自动超时（PRD §12）的手动出口：待确认 → 已超时关闭，流程终止，留档可查。已确认的确认单不可经本端点关闭（走重新放行或回写闭环）。",
+        "operationId": "close_api_v1_confirmations__confirmation_id__close_post",
+        "parameters": [
+          {
+            "name": "confirmation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Confirmation Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ConfirmationClose"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConfirmationPending"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ConfirmationPendingUI"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ConfirmationConfirmed"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ConfirmationClosed"
+                    }
+                  ],
+                  "title": "Response Close Api V1 Confirmations  Confirmation Id  Close Post"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证；Agent Bearer 调用一律 403（BR-1 最后一道门，AC-3 负例）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "STATE_CONFLICT — 确认单非「待确认」态（已确认/已驳回/已关闭不可手动关闭）",
             "content": {
               "application/json": {
                 "schema": {
@@ -3240,6 +3713,118 @@
           }
         ]
       }
+    },
+    "/api/v1/settings/reminders": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "读取提醒偏好（FR-32，D-10）【契约 v2 修订】",
+        "description": "未设置过时返回默认（三项全开）。",
+        "operationId": "get_reminders_api_v1_settings_reminders_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReminderSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "保存提醒偏好（FR-32，D-10）【契约 v2 修订】",
+        "description": "全量替换三项开关；M4 提醒调度按此过滤 24h/1h 日程提醒与网申截止提醒的生成。",
+        "operationId": "put_reminders_api_v1_settings_reminders_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReminderSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReminderSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -3540,6 +4125,24 @@
         ],
         "title": "Body_create_resume_api_v1_resumes_post"
       },
+      "ConfirmationClose": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "title": "ConfirmationClose",
+        "description": "手动关闭（契约 v2 修订）：待确认 → 已超时关闭（§3.4 步骤 6，PRD §12 无自动超时）。"
+      },
       "ConfirmationClosed": {
         "properties": {
           "status": {
@@ -3619,6 +4222,48 @@
             "format": "date-time",
             "title": "Expires At",
             "description": "RFC3339 时间戳（UTC 存储）"
+          },
+          "submit_result": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "success",
+                  "failed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submit Result",
+            "description": "提交结果回写（FR-24，契约 v2 修订）；未回写为 null"
+          },
+          "fail_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fail Reason",
+            "description": "submit_result=failed 时的失败原因（D-06 结果视图 / FR-24）"
+          },
+          "submitted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "description": "RFC3339 时间戳（UTC 存储）"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submitted At",
+            "description": "回写时间；未回写为 null"
           }
         },
         "type": "object",
@@ -3693,6 +4338,91 @@
         "title": "ConfirmationCreated",
         "description": "创建响应：不携带任何可提交许可（BR-1）。"
       },
+      "ConfirmationList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ConfirmationListItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ConfirmationList"
+      },
+      "ConfirmationListItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "application_id": {
+            "type": "string",
+            "title": "Application Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConfirmationStatus"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At",
+            "description": "RFC3339 时间戳（UTC 存储）"
+          },
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "description": "RFC3339 时间戳（UTC 存储）"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed At"
+          },
+          "submit_result": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "success",
+                  "failed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submit Result"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "application_id",
+          "status",
+          "created_at"
+        ],
+        "title": "ConfirmationListItem",
+        "description": "确认单摘要（D-01 待确认分组 / 红点数据源，契约 v2 修订）。"
+      },
       "ConfirmationPending": {
         "properties": {
           "status": {
@@ -3704,7 +4434,151 @@
         },
         "type": "object",
         "title": "ConfirmationPending",
-        "description": "待确认：除状态外无其他字段。"
+        "description": "待确认（Agent 视图）：除状态外无其他字段。"
+      },
+      "ConfirmationPendingUI": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "待确认",
+            "title": "Status",
+            "default": "待确认"
+          },
+          "application_id": {
+            "type": "string",
+            "title": "Application Id"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Fields",
+            "description": "Agent 提交的待确认字段-值快照"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context",
+            "description": "提交上下文（如 target_url、note）"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At",
+            "description": "RFC3339 时间戳（UTC 存储）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "application_id",
+          "fields",
+          "created_at"
+        ],
+        "title": "ConfirmationPendingUI",
+        "description": "待确认（UI session 视图，契约 v2 修订）：返回字段-值快照供 D-06 对照表渲染。\n\nBR-1 管的是「许可不给 Agent」——用户本人查看自己待确认的快照不含任何可提交许可，无冲突；\nAgent Bearer 调用本端点仍只返回 ConfirmationPending（{status}）。"
+      },
+      "ConfirmationRecord": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConfirmationStatus"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At",
+            "description": "RFC3339 时间戳（UTC 存储）"
+          },
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "description": "RFC3339 时间戳（UTC 存储）"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed At"
+          },
+          "submit_result": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "success",
+                  "failed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submit Result"
+          },
+          "fail_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fail Reason"
+          },
+          "submitted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "description": "RFC3339 时间戳（UTC 存储）"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submitted At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "created_at"
+        ],
+        "title": "ConfirmationRecord",
+        "description": "投递关联的确认单记录（FR-24，D-05 确认记录 Tab，契约 v2 修订）。"
+      },
+      "ConfirmationRecordList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ConfirmationRecord"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ConfirmationRecordList"
       },
       "ConfirmationReject": {
         "properties": {
@@ -3722,6 +4596,17 @@
         },
         "type": "object",
         "title": "ConfirmationReject"
+      },
+      "ConfirmationStatus": {
+        "type": "string",
+        "enum": [
+          "待确认",
+          "已确认",
+          "已驳回",
+          "已超时关闭"
+        ],
+        "title": "ConfirmationStatus",
+        "description": "§10.3 确认流状态。"
       },
       "Education": {
         "properties": {
@@ -4224,6 +5109,23 @@
         "title": "EmailEventDetail",
         "description": "事件详情 = 列表字段 + 证据区元数据（D-07，RISK-5 可回溯）。"
       },
+      "EmailEventDetailList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EmailEventDetail"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "EmailEventDetailList",
+        "description": "邮件回溯列表（FR-43，D-05 邮件 Tab，契约 v2 修订）。"
+      },
       "EmailEventDiscard": {
         "properties": {
           "reason": {
@@ -4479,6 +5381,15 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "HistorySource": {
+        "type": "string",
+        "enum": [
+          "ui",
+          "email",
+          "agent"
+        ],
+        "title": "HistorySource"
       },
       "Job": {
         "properties": {
@@ -5061,6 +5972,31 @@
         "title": "ProfileUpdate",
         "description": "档案写（FR-2/3，D-03 显式保存）：全量替换指定简历版本的结构化档案。"
       },
+      "ReminderSettings": {
+        "properties": {
+          "schedule_24h": {
+            "type": "boolean",
+            "title": "Schedule 24H",
+            "description": "日程事件 24h 前提醒开关",
+            "default": true
+          },
+          "schedule_1h": {
+            "type": "boolean",
+            "title": "Schedule 1H",
+            "description": "日程事件 1h 前提醒开关",
+            "default": true
+          },
+          "include_deadline": {
+            "type": "boolean",
+            "title": "Include Deadline",
+            "description": "是否在提醒中包含网申截止提醒",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "ReminderSettings",
+        "description": "提醒偏好（FR-32 配套，D-10）：持久化存储，默认全开。"
+      },
       "ResumeInfo": {
         "properties": {
           "id": {
@@ -5341,6 +6277,63 @@
         "title": "StatsOverview",
         "description": "FR-52 指标卡；筛选参数（channel/from/to）作用于全部指标（FR-51）。"
       },
+      "StatusHistoryEntry": {
+        "properties": {
+          "from_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApplicationStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to_status": {
+            "$ref": "#/components/schemas/ApplicationStatus"
+          },
+          "source": {
+            "$ref": "#/components/schemas/HistorySource",
+            "description": "流转来源：ui / email / agent（BR-11 打标）"
+          },
+          "rejected": {
+            "type": "boolean",
+            "title": "Rejected",
+            "description": "被状态机拒绝的自动写入标记（§5，AC-6 排查）"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At",
+            "description": "RFC3339 时间戳（UTC 存储）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "to_status",
+          "source",
+          "rejected",
+          "created_at"
+        ],
+        "title": "StatusHistoryEntry",
+        "description": "状态历史（FR-31，D-05 状态历史 Tab，契约 v2 修订）。"
+      },
+      "StatusHistoryList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/StatusHistoryEntry"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "StatusHistoryList"
+      },
       "SubmitResult": {
         "properties": {
           "submit_token": {
@@ -5492,6 +6485,10 @@
     {
       "name": "stats",
       "description": "统计与 CSV 导出（FR-50/51/52，口径 §10.4）——仅 UI session【契约 v2】"
+    },
+    {
+      "name": "settings",
+      "description": "设置（提醒偏好，FR-32 配套）——仅 UI session【契约 v2 修订】"
     }
   ]
 }

@@ -194,3 +194,13 @@ class ApiKey(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
     revoked_at: datetime | None = None
     last_used_at: datetime | None = None
+
+
+class AppSetting(SQLModel, table=True):
+    """应用设置 KV（契约 v2 修订：提醒偏好等 D-10 持久化，替代前端 localStorage 过渡态）。"""
+
+    __tablename__ = "app_setting"
+
+    seq: int | None = Field(default=None, primary_key=True)
+    key: str = Field(unique=True, index=True)
+    value: dict = Field(default_factory=dict, sa_column=Column(JSON))

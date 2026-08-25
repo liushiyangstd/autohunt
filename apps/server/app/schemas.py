@@ -219,6 +219,36 @@ class ApplicationList(BaseModel):
     next_cursor: str | None = None
 
 
+class StatusHistoryEntry(BaseModel):
+    """状态历史（FR-31，D-05 状态历史 Tab，契约 v2 修订）。"""
+
+    from_status: ApplicationStatus | None = None
+    to_status: ApplicationStatus
+    source: HistorySource = Field(description="流转来源：ui / email / agent（BR-11 打标）")
+    rejected: bool = Field(description="被状态机拒绝的自动写入标记（§5，AC-6 排查）")
+    created_at: RFC3339
+
+
+class StatusHistoryList(BaseModel):
+    items: list[StatusHistoryEntry]
+
+
+class ConfirmationRecord(BaseModel):
+    """投递关联的确认单记录（FR-24，D-05 确认记录 Tab，契约 v2 修订）。"""
+
+    id: str
+    status: ConfirmationStatus
+    created_at: RFC3339
+    confirmed_at: RFC3339 | None = None
+    submit_result: Literal["success", "failed"] | None = None
+    fail_reason: str | None = None
+    submitted_at: RFC3339 | None = None
+
+
+class ConfirmationRecordList(BaseModel):
+    items: list[ConfirmationRecord]
+
+
 # ---------- confirmations（FR-22/23/24 + BR-1，§3.4 核心） ----------
 
 
@@ -237,9 +267,23 @@ class ConfirmationCreated(BaseModel):
 
 
 class ConfirmationPending(BaseModel):
-    """待确认：除状态外无其他字段。"""
+    """待确认（Agent 视图）：除状态外无其他字段。"""
 
     status: Literal[ConfirmationStatus.pending] = ConfirmationStatus.pending
+
+
+class ConfirmationPendingUI(BaseModel):
+    """待确认（UI session 视图，契约 v2 修订）：返回字段-值快照供 D-06 对照表渲染。
+
+    BR-1 管的是「许可不给 Agent」——用户本人查看自己待确认的快照不含任何可提交许可，无冲突；
+    Agent Bearer 调用本端点仍只返回 ConfirmationPending（{status}）。
+    """
+
+    status: Literal[ConfirmationStatus.pending] = ConfirmationStatus.pending
+    application_id: str
+    fields: dict[str, str] = Field(description="Agent 提交的待确认字段-值快照")
+    context: dict[str, str] | None = Field(default=None, description="提交上下文（如 target_url、note）")
+    created_at: RFC3339
 
 
 class ConfirmationClosed(BaseModel):
@@ -258,9 +302,32 @@ class ConfirmationConfirmed(BaseModel):
         description="一次性提交许可：绑定 confirmation_id + confirmed_fields 哈希，TTL 30 分钟；已过期/已消耗时为 null"
     )
     expires_at: RFC3339
+    submit_result: Literal["success", "failed"] | None = Field(
+        default=None, description="提交结果回写（FR-24，契约 v2 修订）；未回写为 null"
+    )
+    fail_reason: str | None = Field(
+        default=None, description="submit_result=failed 时的失败原因（D-06 结果视图 / FR-24）"
+    )
+    submitted_at: RFC3339 | None = Field(default=None, description="回写时间；未回写为 null")
 
 
-ConfirmationDetail = ConfirmationPending | ConfirmationConfirmed | ConfirmationClosed
+ConfirmationDetail = ConfirmationPending | ConfirmationPendingUI | ConfirmationConfirmed | ConfirmationClosed
+
+
+class ConfirmationListItem(BaseModel):
+    """确认单摘要（D-01 待确认分组 / 红点数据源，契约 v2 修订）。"""
+
+    id: str
+    application_id: str
+    status: ConfirmationStatus
+    created_at: RFC3339
+    confirmed_at: RFC3339 | None = None
+    submit_result: Literal["success", "failed"] | None = None
+
+
+class ConfirmationList(BaseModel):
+    items: list[ConfirmationListItem]
+    next_cursor: str | None = None
 
 
 class ConfirmationConfirm(BaseModel):
@@ -268,6 +335,12 @@ class ConfirmationConfirm(BaseModel):
 
 
 class ConfirmationReject(BaseModel):
+    reason: str | None = None
+
+
+class ConfirmationClose(BaseModel):
+    """手动关闭（契约 v2 修订）：待确认 → 已超时关闭（§3.4 步骤 6，PRD §12 无自动超时）。"""
+
     reason: str | None = None
 
 
@@ -304,7 +377,6 @@ class EmailEvent(BaseModel):
 class EmailEventList(BaseModel):
     items: list[EmailEvent]
     next_cursor: str | None = None
-
 
 class ScheduleEvent(BaseModel):
     id: str
@@ -425,6 +497,12 @@ class EmailEventDetail(EmailEvent):
     email_received_at: RFC3339 | None = None
 
 
+class EmailEventDetailList(BaseModel):
+    """邮件回溯列表（FR-43，D-05 邮件 Tab，契约 v2 修订）。"""
+
+    items: list[EmailEventDetail]
+
+
 class EmailEventConfirm(BaseModel):
     """确认加入日程；任一字段均可修正（修正后加入 = 确认值取修改后值，D-07）。"""
 
@@ -495,3 +573,14 @@ class FunnelConversions(BaseModel):
 class StatsFunnel(BaseModel):
     stages: list[FunnelStage] = Field(description="固定四级：已投递 → 笔试 → 面试 → offer")
     conversions: FunnelConversions
+
+
+# ---------- 设置（D-10，契约 v2 修订；仅 UI session） ----------
+
+
+class ReminderSettings(BaseModel):
+    """提醒偏好（FR-32 配套，D-10）：持久化存储，默认全开。"""
+
+    schedule_24h: bool = Field(default=True, description="日程事件 24h 前提醒开关")
+    schedule_1h: bool = Field(default=True, description="日程事件 1h 前提醒开关")
+    include_deadline: bool = Field(default=True, description="是否在提醒中包含网申截止提醒")

@@ -360,3 +360,92 @@ def test_reject_flow(client, ui, agent):
     polled = client.get(f"/api/v1/confirmations/{confirmation_id}", **agent).json()
     assert polled["status"] == "已驳回"
     assert "submit_token" not in polled
+
+
+# ---------- 契约 v2 修订：列表 / UI 快照变体 / 手动关闭 / 回写字段 ----------
+
+
+def test_list_confirmations_ui_only(client, ui, agent):
+    """GET /confirmations：仅 UI；返回摘要（不含 fields 快照）。"""
+    _, app_id = make_application(client, agent)
+    confirmation_id = make_confirmation(client, agent, app_id)
+
+    denied = client.get("/api/v1/confirmations", **agent)
+    assert denied.status_code == 403
+    assert denied.json()["error"]["code"] == "FORBIDDEN"
+
+    listed = client.get("/api/v1/confirmations", **ui)
+    assert listed.status_code == 200
+    items = listed.json()["items"]
+    assert [i["id"] for i in items] == [confirmation_id]
+    assert items[0]["status"] == "待确认"
+    assert "fields" not in items[0]  # 摘要不带快照，快照走 GET /{id} UI 变体
+
+    filtered = client.get("/api/v1/confirmations?status=已确认", **ui)
+    assert filtered.json()["items"] == []
+
+
+def test_pending_snapshot_ui_vs_agent(client, ui, agent):
+    """待确认变体按 caller 区分：UI 见快照，Agent 仅 {status}（BR-1 不变）。"""
+    _, app_id = make_application(client, agent)
+    confirmation_id = make_confirmation(client, agent, app_id)
+
+    as_agent = client.get(f"/api/v1/confirmations/{confirmation_id}", **agent)
+    assert as_agent.json() == {"status": "待确认"}
+
+    as_ui = client.get(f"/api/v1/confirmations/{confirmation_id}", **ui)
+    body = as_ui.json()
+    assert body["status"] == "待确认"
+    assert body["fields"] == {"姓名": "张三", "电话": "13800000000"}
+    assert body["application_id"] == app_id
+    assert "submit_token" not in body  # 快照不含任何许可
+
+
+def test_close_pending_flow(client, ui, agent):
+    """手动关闭：待确认 → 已超时关闭；非待确认 409；Agent 403。"""
+    _, app_id = make_application(client, agent)
+    confirmation_id = make_confirmation(client, agent, app_id)
+
+    denied = client.post(f"/api/v1/confirmations/{confirmation_id}/close", json={}, **agent)
+    assert denied.status_code == 403
+
+    closed = client.post(
+        f"/api/v1/confirmations/{confirmation_id}/close", json={"reason": "岗位已下架"}, **ui
+    )
+    assert closed.status_code == 200
+    assert closed.json()["status"] == "已超时关闭"
+    assert closed.json()["reason"] == "岗位已下架"
+
+    polled = client.get(f"/api/v1/confirmations/{confirmation_id}", **agent).json()
+    assert polled["status"] == "已超时关闭"
+
+    again = client.post(f"/api/v1/confirmations/{confirmation_id}/close", json={}, **ui)
+    assert again.status_code == 409
+    assert again.json()["error"]["code"] == "STATE_CONFLICT"
+
+
+def test_close_confirmed_rejected(client, ui, agent):
+    """已确认不可手动关闭（走重新放行/回写闭环）。"""
+    _, confirmation_id, _ = _confirmed(client, ui, agent)
+    resp = client.post(f"/api/v1/confirmations/{confirmation_id}/close", json={}, **ui)
+    assert resp.status_code == 409
+
+
+def test_confirmed_detail_carries_submit_result(client, ui, agent):
+    """FR-24 结果视图：回写后 GET 已确认响应含 submit_result/fail_reason/submitted_at。"""
+    app_id, confirmation_id, confirmed = _confirmed(client, ui, agent)
+
+    before = client.get(f"/api/v1/confirmations/{confirmation_id}", **ui).json()
+    assert before["submit_result"] is None
+    assert before["fail_reason"] is None
+
+    client.post(
+        f"/api/v1/applications/{app_id}/submit-result",
+        json={"submit_token": confirmed["submit_token"], "result": "failed",
+              "fail_reason": "目标站点验证码拦截", "submitted_at": "2026-08-25T14:00:00"},
+        **agent,
+    )
+    after = client.get(f"/api/v1/confirmations/{confirmation_id}", **ui).json()
+    assert after["submit_result"] == "failed"
+    assert after["fail_reason"] == "目标站点验证码拦截"
+    assert after["submitted_at"] is not None

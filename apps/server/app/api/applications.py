@@ -1,11 +1,23 @@
-"""投递读写（FR-21，§3.3；状态推进经状态机裁决 §5）。"""
+"""投递读写（FR-21，§3.3；状态推进经状态机裁决 §5）。
+
+契约 v2 修订（D-05 读侧 + D-09 筛选）：
+- `GET /applications` 增加可选 from/to 时间段筛选（按投递时间 applied_at）；
+- `GET /applications/{id}/history` 状态历史（FR-31）；
+- `GET /applications/{id}/confirmations` 确认记录（FR-24 结果留档）；
+- `GET /applications/{id}/emails` 关联邮件回溯（FR-43，按岗位匹配）。
+"""
+
+from datetime import datetime
 
 from fastapi import APIRouter, Header, Query, Request, status
 from sqlmodel import select
 
 from autohunt_domain.models import Application as ApplicationRow
+from autohunt_domain.models import Confirmation as ConfirmationRow
+from autohunt_domain.models import EmailEvent as EmailEventRow
 from autohunt_domain.models import Job as JobRow
-from autohunt_domain.models import utcnow
+from autohunt_domain.models import StatusHistory as StatusHistoryRow
+from autohunt_domain.models import naive_utc, utcnow
 from app.api.deps import ANY_CALLER, AGENT_ONLY
 from app.auth import any_caller, caller_of, require_agent
 from app.config import get_settings
@@ -17,7 +29,17 @@ from app.schemas import (
     ApplicationList,
     ApplicationStatus,
     ApplicationUpdate,
+    ConfirmationRecord,
+    ConfirmationRecordList,
+    ConfirmationStatus,
+    EmailEventDetail,
+    EmailEventDetailList,
+    EmailEventStatus,
+    EmailEventType,
     ErrorEnvelope,
+    HistorySource,
+    StatusHistoryEntry,
+    StatusHistoryList,
     SubmitResult,
     SubmitResultAck,
 )
@@ -78,7 +100,11 @@ def create_application(request: Request, body: ApplicationCreate) -> Application
     response_model=ApplicationList,
     responses=COMMON_ERRORS,
     summary="投递列表（看板数据源，FR-12）",
-    description="筛选：status / company / channel；分页 ?cursor=&limit=（默认 50）。",
+    description=(
+        "筛选：status / company / channel；分页 ?cursor=&limit=（默认 50）。"
+        "契约 v2 修订：新增可选 from/to（RFC3339）按投递时间 applied_at 过滤（D-09 明细表时间段筛选，FR-51）；"
+        "applied_at 为空（尚未投递）的记录在指定 from/to 时不返回。"
+    ),
     openapi_extra={"security": ANY_CALLER},
 )
 def list_applications(
@@ -86,6 +112,8 @@ def list_applications(
     status_: ApplicationStatus | None = Query(default=None, alias="status"),
     company: str | None = None,
     channel: str | None = None,
+    from_: str | None = Query(default=None, alias="from", description="投递时间起（RFC3339，按 applied_at）"),
+    to: str | None = Query(default=None, description="投递时间止（RFC3339，按 applied_at）"),
     cursor: str | None = None,
     limit: int = 50,
 ) -> ApplicationList:
@@ -94,6 +122,10 @@ def list_applications(
         stmt = select(ApplicationRow).order_by(ApplicationRow.seq)
         if status_ is not None:
             stmt = stmt.where(ApplicationRow.status == status_.value)
+        if from_ is not None:
+            stmt = stmt.where(ApplicationRow.applied_at >= naive_utc(datetime.fromisoformat(from_)))
+        if to is not None:
+            stmt = stmt.where(ApplicationRow.applied_at <= naive_utc(datetime.fromisoformat(to)))
         if company is not None or channel is not None:
             stmt = stmt.join(JobRow, ApplicationRow.job_id == JobRow.id)
             if company is not None:
@@ -216,3 +248,115 @@ def submit_result(request: Request, application_id: str, body: SubmitResult) -> 
         session.add(confirmation)
         session.commit()
         return SubmitResultAck(application_id=application_id, status=ApplicationStatus(row.status))
+
+
+# ---------- 契约 v2 修订：D-05 读侧三端点（只读，双鉴权，与既有读端点同口径） ----------
+
+
+@router.get(
+    "/{application_id}/history",
+    response_model=StatusHistoryList,
+    responses={**COMMON_ERRORS, 404: {"model": ErrorEnvelope, "description": "NOT_FOUND"}},
+    summary="状态历史（FR-31，D-05 状态历史 Tab）【契约 v2 修订】",
+    description=(
+        "按时间正序返回该投递的全部 status_history 记录（含 source 与 rejected 标记，"
+        "被拒绝的自动写入也可查，AC-6 排查）。"
+    ),
+    openapi_extra={"security": ANY_CALLER},
+)
+def get_application_history(request: Request, application_id: str) -> StatusHistoryList:
+    any_caller(request)
+    with session_for(get_settings().data_dir) as session:
+        _get_or_404(session, application_id)
+        rows = session.exec(
+            select(StatusHistoryRow)
+            .where(StatusHistoryRow.application_id == application_id)
+            .order_by(StatusHistoryRow.seq)
+        ).all()
+        return StatusHistoryList(
+            items=[
+                StatusHistoryEntry(
+                    from_status=ApplicationStatus(row.from_status) if row.from_status else None,
+                    to_status=ApplicationStatus(row.to_status),
+                    source=HistorySource(row.source),
+                    rejected=row.rejected,
+                    created_at=row.created_at,
+                )
+                for row in rows
+            ]
+        )
+
+
+@router.get(
+    "/{application_id}/confirmations",
+    response_model=ConfirmationRecordList,
+    responses={**COMMON_ERRORS, 404: {"model": ErrorEnvelope, "description": "NOT_FOUND"}},
+    summary="确认记录（FR-22/24，D-05 确认记录 Tab）【契约 v2 修订】",
+    description="返回该投递关联的全部确认单（状态、确认时间、提交结果回写），按创建时间正序。",
+    openapi_extra={"security": ANY_CALLER},
+)
+def get_application_confirmations(request: Request, application_id: str) -> ConfirmationRecordList:
+    any_caller(request)
+    with session_for(get_settings().data_dir) as session:
+        _get_or_404(session, application_id)
+        rows = session.exec(
+            select(ConfirmationRow)
+            .where(ConfirmationRow.application_id == application_id)
+            .order_by(ConfirmationRow.seq)
+        ).all()
+        return ConfirmationRecordList(
+            items=[
+                ConfirmationRecord(
+                    id=row.id,
+                    status=ConfirmationStatus(row.status),
+                    created_at=row.created_at,
+                    confirmed_at=row.confirmed_at,
+                    submit_result=row.submit_result,
+                    fail_reason=row.fail_reason,
+                    submitted_at=row.submitted_at,
+                )
+                for row in rows
+            ]
+        )
+
+
+@router.get(
+    "/{application_id}/emails",
+    response_model=EmailEventDetailList,
+    responses={**COMMON_ERRORS, 404: {"model": ErrorEnvelope, "description": "NOT_FOUND"}},
+    summary="关联邮件回溯（FR-43，D-05 邮件 Tab）【契约 v2 修订】",
+    description=(
+        "返回识别匹配到该投递所属岗位（matched_job_id = application.job_id）的全部邮箱事件，"
+        "含证据区元数据（主题/发件人/收件时间，RISK-5）。按识别时间正序。"
+    ),
+    openapi_extra={"security": ANY_CALLER},
+)
+def get_application_emails(request: Request, application_id: str) -> EmailEventDetailList:
+    any_caller(request)
+    with session_for(get_settings().data_dir) as session:
+        application = _get_or_404(session, application_id)
+        rows = session.exec(
+            select(EmailEventRow)
+            .where(EmailEventRow.matched_job_id == application.job_id)
+            .order_by(EmailEventRow.seq)
+        ).all()
+        return EmailEventDetailList(
+            items=[
+                EmailEventDetail(
+                    id=row.id,
+                    type=EmailEventType(row.type),
+                    event_time=row.event_time,
+                    location=row.location,
+                    meeting_link=row.meeting_link,
+                    company=row.company,
+                    matched_job_id=row.matched_job_id,
+                    status=EmailEventStatus(row.status),
+                    created_at=row.created_at,
+                    # 证据区列随 M4 迁移落库（技设 §4）；迁移前为 None
+                    email_subject=getattr(row, "email_subject", None),
+                    email_sender=getattr(row, "email_sender", None),
+                    email_received_at=getattr(row, "email_received_at", None),
+                )
+                for row in rows
+            ]
+        )
