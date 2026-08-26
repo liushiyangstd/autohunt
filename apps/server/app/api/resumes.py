@@ -113,7 +113,7 @@ async def create_resume(
         row.file_path = f"resumes/{row.id}.pdf"
         row.is_default = version == 1  # 首个上传版本自动设为默认
 
-        parse_status, fields, missing, parse_error = resume_parse.parse_resume(content)
+        parse_status, fields, missing, parse_error = resume_parse.parse_resume(content, settings)
         row.parse_status = parse_status
         row.missing_fields = missing
         row.parse_error = parse_error
