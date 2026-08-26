@@ -7,6 +7,7 @@ import type {
   EmailAccountTestResult, EmailEventConfirm, EmailEventConfirmResult, EmailEventDetail,
   EmailEventDetailList, EmailEventDiscard, EmailEventList,
   Job, JobCreate, JobList, JobUpdate,
+  LLMConfig, LLMConfigTestResult, LLMConfigUpdate,
   NotificationList, Profile, ProfileResponse, ProfileUpdate, ReminderSettings,
   ResumeInfo, ResumeList, ResumeUpdate,
   ScheduleEventList, StatsFilter, StatsFunnel, StatsOverview, StatusHistoryList,
@@ -119,6 +120,11 @@ export interface AutohuntApi {
   // settings（FR-32 配套，D-10）
   getReminders(): Promise<ReminderSettings>;
   putReminders(body: ReminderSettings): Promise<ReminderSettings>;
+
+  // llm config（PROX-8/PROX-12）
+  getLLMConfig(): Promise<LLMConfig>;
+  putLLMConfig(body: LLMConfigUpdate): Promise<LLMConfig>;
+  testLLMConfig(): Promise<LLMConfigTestResult>;
 }
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api/v1';
@@ -242,6 +248,10 @@ export const httpApi: AutohuntApi = {
 
   getReminders: () => req<ReminderSettings>('/settings/reminders'),
   putReminders: (body) => req<ReminderSettings>('/settings/reminders', { method: 'PUT', body: JSON.stringify(body) }),
+
+  getLLMConfig: () => req<LLMConfig>('/settings/llm'),
+  putLLMConfig: (body) => req<LLMConfig>('/settings/llm', { method: 'PUT', body: JSON.stringify(body) }),
+  testLLMConfig: () => req<LLMConfigTestResult>('/settings/llm/test', { method: 'POST' }),
 };
 
 /**
