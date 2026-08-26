@@ -224,6 +224,18 @@ def test_upload_rejects_non_pdf_and_oversize(client, ui):
     assert resp.status_code == 422
 
 
+def test_upload_rejects_renamed_non_pdf_without_creating_version(client, ui):
+    """AC-9：纯文本内容命名 .pdf（改扩展名）→ 422 校验错误，且不产生版本。"""
+
+    resp = _upload(client, ui, b"this is plain text masquerading as a pdf", filename="fake.pdf")
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+    # 不落库：无任何版本
+    listing = client.get("/api/v1/resumes", **ui).json()
+    assert listing["items"] == []
+
+
 def test_resume_list_detail_rename_default(client, ui, llm_config):
     r1 = _upload(client, ui, FULL_PDF).json()
     r2 = _upload(client, ui, NO_EMAIL_PDF, name="第二版").json()

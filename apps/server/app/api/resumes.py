@@ -105,6 +105,9 @@ async def create_resume(
         raise validation_error("简历 PDF 超过 10MB 上限")
     if not content:
         raise validation_error("上传文件为空")
+    if not content.startswith(b"%PDF"):
+        # AC-9：校验内容签名，改扩展名的非 PDF 文件返回 422 且不落库
+        raise validation_error("文件内容不是合法 PDF")
 
     settings = get_settings()
     with session_for(settings.data_dir) as session:
