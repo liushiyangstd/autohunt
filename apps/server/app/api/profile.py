@@ -116,7 +116,9 @@ def put_profile(request: Request, body: ProfileUpdate) -> Profile:
         session.add(row)
 
         # AC-1：显式保存后重算缺失必填标记，消除/刷新 D-02 解析状态
-        missing = missing_required({"name": row.name, "phone": row.phone, "email": row.email})
+        missing = missing_required(
+            {"name": row.name, "phone": row.phone, "email": row.email, "educations": row.educations}
+        )
         resume.missing_fields = missing
         resume.parse_status = "解析完成" if not missing else "部分字段缺失"
         if resume.parse_status != "解析失败":

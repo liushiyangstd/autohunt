@@ -135,7 +135,9 @@ class Experience(BaseModel):
     description: str | None = None
 
 
-class Profile(BaseModel):
+class ProfileBase(BaseModel):
+    """档案字段本体（§10.1 字段字典，不含 resume 元数据）。"""
+
     name: str | None = None
     phone: str | None = None
     email: str | None = Field(
@@ -148,6 +150,9 @@ class Profile(BaseModel):
     awards: list[str] = []
     expected_city: str | None = None
     expected_position: str | None = None
+
+
+class Profile(ProfileBase):
     resume_id: str
     resume_version: int
 

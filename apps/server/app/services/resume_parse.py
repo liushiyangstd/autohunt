@@ -1,8 +1,10 @@
-"""简历 PDF 解析（FR-2，M3）：pypdf 提取文本 + 规则抽取 §10.1 结构化字段。
+"""简历 PDF 解析（FR-2，M3）：LLM 主解析 + 规则兜底（PROX-9）。
 
-规则实现的定位：MVP 够用即可——必填字段（姓名/电话/邮箱）缺失走
-「部分字段缺失」标记（AC-1），用户进 D-03 手动补全；解析整体失败返回
-「解析失败」不阻塞上传（§12）。
+- 优先使用配置好的 LLM 解析全部 9 个字段；
+- 未配置 LLM Key 时直接标记「未配置 API Key」；
+- LLM 调用异常（超时、API 错误、非法 JSON、校验失败）降级到规则抽取；
+- 必填字段缺失走「部分字段缺失」标记（AC-1），用户进 D-03 手动补全；
+- 解析整体失败返回「解析失败」不阻塞上传（§12）。
 """
 
 from __future__ import annotations
@@ -12,7 +14,10 @@ import re
 
 from pypdf import PdfReader
 
-REQUIRED_FIELDS = ("name", "phone", "email")
+from app.config import Settings
+from app.services.llm_client import LLMError, LLMConfig, call_llm, load_config
+
+REQUIRED_FIELDS = ("name", "phone", "email", "educations")
 
 _PHONE_RE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -111,19 +116,41 @@ def missing_required(fields: dict) -> list[str]:
     return [f for f in REQUIRED_FIELDS if not fields.get(f)]
 
 
-def parse_resume(pdf_bytes: bytes) -> tuple[str, dict, list[str], str | None]:
+def parse_resume(pdf_bytes: bytes, settings: Settings) -> tuple[str, dict, list[str], str | None]:
     """解析入口：返回 (parse_status, fields, missing_fields, parse_error)。
 
-    - 解析完成：必填字段齐全
-    - 部分字段缺失：必填字段有缺（AC-1 缺失标记）
-    - 解析失败：无法提取文本（fields 为空，回退 D-03 手动编辑）
+    - 未配置 LLM Key：parse_status=解析失败, parse_error=未配置 API Key
+    - PDF 提取失败：parse_status=解析失败
+    - LLM 成功且校验通过：按必填字段计算缺失状态
+    - LLM 异常：降级到规则解析，再计算缺失状态
     """
+
+    try:
+        config = load_config_from_settings(settings)
+    except LLMError as exc:
+        return "解析失败", {}, list(REQUIRED_FIELDS), str(exc)
+    if config is None:
+        return "解析失败", {}, list(REQUIRED_FIELDS), "未配置 API Key"
 
     try:
         text = extract_text(pdf_bytes)
     except ParseFailure as exc:
         return "解析失败", {}, list(REQUIRED_FIELDS), str(exc)
-    fields = parse_fields(text)
+
+    try:
+        fields = call_llm(text, config)
+    except LLMError:
+        fields = parse_fields(text)
+
     missing = missing_required(fields)
     status = "解析完成" if not missing else "部分字段缺失"
     return status, fields, missing, None
+
+
+def load_config_from_settings(settings: Settings) -> LLMConfig | None:
+    """基于 Settings 从数据库加载 LLM 配置（不直接依赖 get_settings 便于测试）。"""
+
+    from app.db import session_for
+
+    with session_for(settings.data_dir) as session:
+        return load_config(session)

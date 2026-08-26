@@ -48,7 +48,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     lifespan=lifespan,
     title="autohunt API",
-    version="0.2.1",
+    version="0.2.2",
     description=(
         "autohunt 系统对外 API 契约（技术设计 v1.3 §3）。\n\n"
         "通用约定：JSON；错误统一信封 `{\"error\": {\"code\", \"message\", \"details?\"}}`；"
