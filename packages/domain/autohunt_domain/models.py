@@ -19,7 +19,19 @@ def new_id() -> str:
     return uuid.uuid4().hex
 
 
+_now_override: datetime | None = None
+
+
+def set_clock_override(dt: datetime | None) -> None:
+    """测试钩子（§17 ③）：覆盖全局「现在」，传 None 恢复真实时钟。仅测试环境调用。"""
+
+    global _now_override
+    _now_override = dt
+
+
 def utcnow() -> datetime:
+    if _now_override is not None:
+        return _now_override
     return datetime.now(timezone.utc)
 
 
@@ -39,6 +51,11 @@ class Resume(SQLModel, table=True):
     name: str
     file_path: str
     is_default: bool = False
+    version: int = 1
+    # 解析状态机（§3.7，AC-1）：解析中/解析完成/部分字段缺失/解析失败
+    parse_status: str = "解析中"
+    missing_fields: list = Field(default_factory=list, sa_column=Column(JSON))
+    parse_error: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -85,6 +102,7 @@ class Application(SQLModel, table=True):
     status: str = "待投递"
     interview_round: int | None = None
     note: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)  # 统计 from/to 按创建时间（FR-51）
 
 
 class StatusHistory(SQLModel, table=True):
@@ -137,6 +155,7 @@ class EmailAccount(SQLModel, table=True):
     status: str = "active"  # active / auth_failed
     last_uid: int = 0
     last_sync_at: datetime | None = None
+    created_at: datetime = Field(default_factory=utcnow)
 
 
 class EmailEvent(SQLModel, table=True):
@@ -146,6 +165,7 @@ class EmailEvent(SQLModel, table=True):
     id: str = Field(default_factory=new_id, unique=True, index=True)
     account_id: str = Field(foreign_key="email_account.id", index=True)
     message_id: str = Field(unique=True, index=True)
+    content_hash: str | None = Field(default=None, index=True)  # 去重兜底（§6 步骤 4）
     type: str  # 测评/笔试/面试/offer/拒信
     event_time: datetime | None = None
     location: str | None = None
@@ -153,6 +173,11 @@ class EmailEvent(SQLModel, table=True):
     company: str | None = None
     matched_job_id: str | None = None
     raw_path: str | None = None
+    # 证据区元数据（§3.7，RISK-5 可回溯）
+    email_subject: str | None = None
+    email_sender: str | None = None
+    email_received_at: datetime | None = None
+    discard_reason: str | None = None  # 误识别反馈留存（KPI-2 数据源）
     status: str = "待确认"  # 待确认/已确认/已丢弃
     created_at: datetime = Field(default_factory=utcnow)
 

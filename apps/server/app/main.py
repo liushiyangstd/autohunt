@@ -7,6 +7,8 @@
 运行：uvicorn app.main:app --port 8741（默认端口，§3）
 """
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from app.api import (
@@ -25,8 +27,25 @@ from app.api import (
 from app.auth import AuthMiddleware
 from app.config import get_settings
 from app.errors import ApiError, api_error_handler
+from app.services import imap_worker
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """M4：启动 IMAP 轮询 Worker（AUTOHUNT_IMAP_WORKER=0 可关，测试环境不打网络）。"""
+
+    task = None
+    if imap_worker.worker_enabled():
+        import asyncio
+
+        task = asyncio.create_task(imap_worker.worker_loop(imap_worker.poll_seconds_from_env()))
+    yield
+    if task is not None:
+        task.cancel()
+
 
 app = FastAPI(
+    lifespan=lifespan,
     title="autohunt API",
     version="0.2.1",
     description=(

@@ -3494,7 +3494,7 @@
           "stats"
         ],
         "summary": "投递漏斗（FR-50，口径 §10.4，AC-7 可核对）",
-        "description": "固定四级：已投递 → 笔试 → 面试 → offer；各级 entered_count 与转化率口径见响应字段描述。「待投递」（收藏未投）不计入（§10.4）。筛选参数作用于整表（FR-51）。",
+        "description": "固定四级：已投递 → 笔试 → 面试 → offer；各级 entered_count 与转化率口径见响应字段描述。「待投递」（收藏未投）不计入（§10.4）。筛选参数作用于整页（FR-51）。",
         "operationId": "get_stats_funnel_api_v1_stats_funnel_get",
         "parameters": [
           {

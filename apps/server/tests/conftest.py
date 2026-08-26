@@ -8,6 +8,20 @@ from fastapi.testclient import TestClient
 UI_TOKEN = "ah_ui_test_token_for_pytest"
 
 
+@pytest.fixture(autouse=True)
+def _reset_test_state():
+    """每个用例后清除 §17③ 时钟覆盖与 IMAP fake store，避免跨用例泄漏。"""
+
+    from autohunt_domain.models import set_clock_override
+    from app.services.imap_fake import get_store
+
+    set_clock_override(None)
+    get_store().reset()
+    yield
+    set_clock_override(None)
+    get_store().reset()
+
+
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("AUTOHUNT_DATA_DIR", str(tmp_path))
