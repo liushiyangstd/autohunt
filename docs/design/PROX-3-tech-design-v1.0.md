@@ -10,7 +10,7 @@
 |---|---|---|
 | v1.0 | 2026-08-25 | S1a 初版（G1 提交） |
 | v1.1 | 2026-08-25 | 按 G1 业务评审（FAIL）返工：B-1 §3.4 显式限定确认/驳回端点仅接受 UI session，"Agent 直调确认接口"入 AC-3 负例矩阵；B-2 §3.4 新增 token 过期/消耗后的「重新放行」路径（仅 UI 动作）并补验证；B-3 删除 72h 自动超时，对齐 PRD §12"持续挂起 + 手动关闭"；§5 补旁路终止态的自动来源进入规则；§4 明确网申截止提醒按 `job.deadline` 即时计算不落库；§3.2 补档案邮箱默认值逻辑 |
-| v1.2 | 2026-08-26 | 契约 v2 增补（S3b 判门后范围补齐）：新增 §3.7（简历上传/版本管理、档案写、邮箱账户绑定/解绑/状态、事件确认/丢弃/修正、通知列表、统计与 CSV 导出端点，全部仅 UI session）；§4 修正 submit_token 存储口径为 Fernet 加密落盘（裁决 §4"只存哈希"与 §3.4"GET 返回明文给 Agent"的内部矛盾，Leader 已批，与授权码同口径）；§4 补 resume 解析状态列、email_event 证据区列 |
+| v1.2 | 2026-08-26 | 契约 v2 增补（S3b 判门后范围补齐）：新增 §3.7（简历上传/版本管理、档案写、邮箱账户绑定/解绑/状态、事件确认/丢弃/修正、通知列表、统计与 CSV 导出端点，全部仅 UI session）；§4 修正 submit_token 存储口径为 Fernet 加密落盘（裁决 §4"只存哈希"与 §3.4"GET 返回明文给 Agent"的内部矛盾，Leader 已批，与授权码同口径）；§4 补 resume 解析状态列、email_event 证据区列；§3.7 补确认流修订（`GET /confirmations` 列表、待确认变体按 caller 区分 UI 快照、`POST /confirmations/{id}/close` 手动关闭、「已确认」响应含 submit_result 回写）+ D-05 读侧三端点（history/confirmations/emails）+ `GET/PUT /settings/reminders` 提醒偏好 + `GET /applications` 可选 from/to 筛选（S3a 判门裁决，契约 info.version 0.2.1） |
 
 ## 1. 当前架构
 
@@ -163,6 +163,24 @@ FastAPI 自动生成 OpenAPI 3.1（`/openapi.json`），随仓库导出 `docs/de
 - `GET /stats/overview?channel=&from=&to=` → 指标卡：total_applications（状态≠待投递）、in_progress（已投递/笔试/面试/offer）、pending_items（待确认投递+待确认事件，同 D-01 红点口径）、offers（offer+已接受，OP-10）。
 - `GET /stats/funnel?channel=&from=&to=` → 固定四级 已投递→笔试→面试→offer；`entered_count` = status_history 出现该级或主链更后状态的投递数（去重）；转化率按 §10.4（笔试率=进笔试/已投递及以后，面试率=进面试/进笔试，offer率=进offer/全部已投递；分母为 0 时率为 null）。筛选参数作用于整页（FR-51）。
 - `GET /stats/export?channel=&from=&to=` → text/csv 台账导出（UTF-8 带 BOM；列：公司/岗位名/渠道/地点/JD 链接/简历版本 ID/投递时间/当前状态/面试轮次/备注，§10.2）。
+
+**确认流修订（S3a 判门裁决的 4 项缺口，D-01/D-06 真实后端可用性前提）**
+- `GET /confirmations?status=&cursor=&limit=`（仅 UI）→ 确认单摘要列表（含 application_id、公司/岗位名、status、created_at），D-01 待确认分组与红点计数的数据源。
+- `GET /confirmations/{id}` 待确认变体按 caller 区分：**UI session 返回 `ConfirmationPendingUI`（fields 字段-值快照 + context 数据来源，D-06 对照表）；Agent Bearer 仍仅返回 `{status}`**——BR-1 管的是"许可不给 Agent"，用户本人看自己的待确认快照不冲突；`submit_token` 依旧只出现在「已确认」变体。
+- 「已确认」变体 `ConfirmationConfirmed` 增补 `submit_result` / `fail_reason` / `submitted_at` 回写字段（FR-24 结果视图数据源；未回写时为 null）。
+- `POST /confirmations/{id}/close`（仅 UI）→ 手动关闭为「已超时关闭」（§12 无自动超时的手动出口）；非待确认态 409。
+
+**D-05 读侧端点（FR-31/24/43，S3a 判门裁决 #1）**
+- `GET /applications/{id}/history` → 状态历史（含 source 与 rejected 标记，AC-6 提示条数据源）。
+- `GET /applications/{id}/confirmations` → 该投递的确认记录列表（含回写结果）。
+- `GET /applications/{id}/emails` → 关联邮件事件回溯列表（证据区元数据，不含原文——原文走 `GET /events/{id}/raw` 仅 UI）。
+- 三者均为**双鉴权只读**：与 v1 `GET /applications` 读侧双鉴权同口径（Agent 只读其操作对象的历史，无写许可）。
+
+**提醒偏好（FR-32 配套，D-10，S3a 判门裁决 #2）**
+- `GET /settings/reminders` / `PUT /settings/reminders`（仅 UI）→ `{remind_24h, remind_1h, include_deadline}` 三项开关，持久化于 `app_setting` KV 表（替代前端 localStorage 过渡态）；未设置时 GET 返回默认（全开）。M4 提醒调度按此过滤生成。
+
+**既有端点的向后兼容增补（S3a 判门裁决 #3）**
+- `GET /applications` 新增可选 query 参数 `from` / `to`（RFC3339，按 `applied_at` 过滤，D-09 明细表时间段筛选 FR-51）；不传时行为与 v1 完全一致；`applied_at` 为空（尚未投递）的记录在指定 from/to 时不返回。
 
 实现落点：契约骨架随本版本入库（schema + 路由，仅鉴权闸无业务逻辑），业务实现按 §8 M3–M5 推进；`resume` / `email_event` 表新增列见 §4。
 
