@@ -135,7 +135,9 @@ class Experience(BaseModel):
     description: str | None = None
 
 
-class Profile(BaseModel):
+class ProfileBase(BaseModel):
+    """档案字段本体（§10.1 字段字典，不含 resume 元数据）。"""
+
     name: str | None = None
     phone: str | None = None
     email: str | None = Field(
@@ -148,6 +150,9 @@ class Profile(BaseModel):
     awards: list[str] = []
     expected_city: str | None = None
     expected_position: str | None = None
+
+
+class Profile(ProfileBase):
     resume_id: str
     resume_version: int
 
@@ -604,6 +609,16 @@ class ReminderSettings(BaseModel):
     schedule_24h: bool = Field(default=True, description="日程事件 24h 前提醒开关")
     schedule_1h: bool = Field(default=True, description="日程事件 1h 前提醒开关")
     include_deadline: bool = Field(default=True, description="是否在提醒中包含网申截止提醒")
+
+
+class LLMConfig(BaseModel):
+    """LLM 配置存储结构（AppSetting key='llm'，PROX-8 schema）。"""
+
+    enabled: bool = Field(default=False, description="是否启用 LLM 解析")
+    provider: str = Field(default="openai", description="SDK 提供商标识，目前仅 openai 兼容")
+    base_url: str | None = Field(default=None, description="自定义 OpenAI 兼容 API 基础地址")
+    model: str = Field(default="gpt-4o-mini", description="模型名")
+    api_key_enc: str | None = Field(default=None, description="Fernet 加密后的 API Key")
 
 
 # ---------- UI session 引导（根因修复：浏览器首访签发 cookie） ----------
