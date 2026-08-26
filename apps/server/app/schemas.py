@@ -606,6 +606,40 @@ class ReminderSettings(BaseModel):
     include_deadline: bool = Field(default=True, description="是否在提醒中包含网申截止提醒")
 
 
+# ---------- LLM 配置（PROX-8，简历解析） ----------
+
+
+class LLMConfigUpdate(BaseModel):
+    """保存/更新 LLM 配置；api_key 为写-only，响应中永不回传。"""
+
+    enabled: bool = Field(default=True, description="是否启用 LLM 解析")
+    provider: str = Field(default="openai", description="提供商标识，如 openai / openai-compatible")
+    base_url: str | None = Field(default=None, description="自定义 base_url；空时使用官方端点")
+    model: str = Field(default="gpt-4o-mini", description="模型名")
+    api_key: str | None = Field(default=None, description="API Key；仅写入，服务端 Fernet 加密后落盘")
+    timeout_seconds: int = Field(default=15, ge=1, description="请求超时（秒）")
+    max_tokens: int = Field(default=2048, ge=1, description="最大输出 token 数")
+
+
+class LLMConfig(BaseModel):
+    """LLM 配置读取视图；永不包含 api_key_enc，仅回传末四位掩码。"""
+
+    enabled: bool = Field(default=True, description="是否启用 LLM 解析")
+    provider: str = Field(default="openai", description="提供商标识")
+    base_url: str | None = Field(default=None, description="自定义 base_url")
+    model: str = Field(default="gpt-4o-mini", description="模型名")
+    api_key_last4: str | None = Field(default=None, description="API Key 末四位，便于 UI 提示已配置")
+    timeout_seconds: int = Field(default=15, description="请求超时（秒）")
+    max_tokens: int = Field(default=2048, description="最大输出 token 数")
+
+
+class LLMConfigTestResult(BaseModel):
+    """LLM 连通性探测结果。"""
+
+    ok: bool
+    error: str | None = Field(default=None, description="失败原因；成功时为 null")
+
+
 # ---------- UI session 引导（根因修复：浏览器首访签发 cookie） ----------
 
 

@@ -9,6 +9,7 @@ dependencies = [
     "cryptography>=42",
     "python-multipart>=0.0.9",
     "pypdf>=4",
+    "httpx>=0.28",
     "autohunt-domain",
 ]
 

@@ -3826,6 +3826,165 @@
         ]
       }
     },
+    "/api/v1/settings/llm": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "读取 LLM 配置（PROX-8）",
+        "description": "未配置时返回默认空配置；永不回传 api_key_enc，仅返回 api_key_last4。",
+        "operationId": "get_llm_api_v1_settings_llm_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LLMConfig"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "保存/更新 LLM 配置（PROX-8）",
+        "description": "api_key 为写-only，经 Fernet 加密写入 app_setting；响应不回传明文。",
+        "operationId": "put_llm_api_v1_settings_llm_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LLMConfigUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LLMConfig"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/settings/llm/test": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "测试 LLM 连通性（PROX-8）",
+        "description": "解密已存 API Key 后发最小探测请求；返回 ok / error。",
+        "operationId": "test_llm_api_v1_settings_llm_test_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LLMConfigTestResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
+    },
     "/api/v1/ui/session": {
       "get": {
         "tags": [
@@ -5679,6 +5838,156 @@
         },
         "type": "object",
         "title": "JobUpdate"
+      },
+      "LLMConfig": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "description": "是否启用 LLM 解析",
+            "default": true
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider",
+            "description": "提供商标识",
+            "default": "openai"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url",
+            "description": "自定义 base_url"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "模型名",
+            "default": "gpt-4o-mini"
+          },
+          "api_key_last4": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key Last4",
+            "description": "API Key 末四位，便于 UI 提示已配置"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "title": "Timeout Seconds",
+            "description": "请求超时（秒）",
+            "default": 15
+          },
+          "max_tokens": {
+            "type": "integer",
+            "title": "Max Tokens",
+            "description": "最大输出 token 数",
+            "default": 2048
+          }
+        },
+        "type": "object",
+        "title": "LLMConfig",
+        "description": "LLM 配置读取视图；永不包含 api_key_enc，仅回传末四位掩码。"
+      },
+      "LLMConfigTestResult": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "失败原因；成功时为 null"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "title": "LLMConfigTestResult",
+        "description": "LLM 连通性探测结果。"
+      },
+      "LLMConfigUpdate": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "description": "是否启用 LLM 解析",
+            "default": true
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider",
+            "description": "提供商标识，如 openai / openai-compatible",
+            "default": "openai"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url",
+            "description": "自定义 base_url；空时使用官方端点"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "模型名",
+            "default": "gpt-4o-mini"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key",
+            "description": "API Key；仅写入，服务端 Fernet 加密后落盘"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Timeout Seconds",
+            "description": "请求超时（秒）",
+            "default": 15
+          },
+          "max_tokens": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Max Tokens",
+            "description": "最大输出 token 数",
+            "default": 2048
+          }
+        },
+        "type": "object",
+        "title": "LLMConfigUpdate",
+        "description": "保存/更新 LLM 配置；api_key 为写-only，响应中永不回传。"
       },
       "Notification": {
         "properties": {
