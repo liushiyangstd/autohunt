@@ -1,9 +1,0 @@
-INFO:     127.0.0.1:64137 - "GET /api/v1/ui/session HTTP/1.1" 200 OK
-INFO:     127.0.0.1:61108 - "GET /api/v1/ui/session HTTP/1.1" 200 OK
-INFO:     127.0.0.1:61109 - "GET /api/v1/profile HTTP/1.1" 200 OK
-INFO:     127.0.0.1:61110 - "GET /api/v1/resumes HTTP/1.1" 200 OK
-INFO:     127.0.0.1:61111 - "GET /api/v1/resumes HTTP/1.1" 401 Unauthorized
-INFO:     127.0.0.1:62472 - "GET /api/v1/ui/session HTTP/1.1" 200 OK
-INFO:     127.0.0.1:62474 - "GET /api/v1/ui/session HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51348 - "GET /api/v1/resumes HTTP/1.1" 200 OK
-INFO:     127.0.0.1:60100 - "GET /api/v1/ui/session HTTP/1.1" 200 OK
