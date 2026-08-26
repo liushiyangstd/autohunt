@@ -604,3 +604,12 @@ class ReminderSettings(BaseModel):
     schedule_24h: bool = Field(default=True, description="日程事件 24h 前提醒开关")
     schedule_1h: bool = Field(default=True, description="日程事件 1h 前提醒开关")
     include_deadline: bool = Field(default=True, description="是否在提醒中包含网申截止提醒")
+
+
+# ---------- UI session 引导（根因修复：浏览器首访签发 cookie） ----------
+
+
+class UiSessionOk(BaseModel):
+    """GET /ui/session 成功响应；Set-Cookie 侧载 ah_session。"""
+
+    ok: bool = True

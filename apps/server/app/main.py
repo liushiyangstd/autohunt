@@ -23,6 +23,7 @@ from app.api import (
     resumes,
     settings as settings_api,
     stats,
+    ui,
 )
 from app.auth import AuthMiddleware
 from app.config import get_settings
@@ -96,6 +97,9 @@ for module in (resumes, email_accounts, notifications, stats):
 
 # 契约 v2 修订路由（设置，已实现）
 app.include_router(settings_api.router, prefix="/api/v1")
+
+# UI session 引导（根因修复：浏览器首访签发 cookie，白名单无鉴权）
+app.include_router(ui.router, prefix="/api/v1")
 
 app.add_exception_handler(ApiError, api_error_handler)
 app.add_middleware(AuthMiddleware)
