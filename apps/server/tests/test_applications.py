@@ -142,6 +142,31 @@ def test_application_confirmations_endpoint(client, ui, agent):
     assert items[0]["submit_result"] is None
 
 
+# ---------- G3 D1：from/to 非法日期 + cursor/limit 加固 → 422 ----------
+
+
+def _assert_validation_error(resp):
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_list_applications_bad_from_422(client, ui):
+    _assert_validation_error(client.get("/api/v1/applications?from=abc", **ui))
+
+
+def test_list_applications_bad_to_422(client, ui):
+    _assert_validation_error(client.get("/api/v1/applications?to=nope", **ui))
+
+
+def test_list_applications_bad_cursor_422(client, ui):
+    _assert_validation_error(client.get("/api/v1/applications?cursor=abc", **ui))
+
+
+def test_list_applications_bad_limit_422(client, ui):
+    _assert_validation_error(client.get("/api/v1/applications?limit=0", **ui))
+    _assert_validation_error(client.get("/api/v1/applications?limit=-1", **ui))
+
+
 def test_application_emails_endpoint(client, ui):
     """按 matched_job_id = application.job_id 匹配；含证据区元数据字段。"""
     from autohunt_domain.models import EmailAccount, EmailEvent

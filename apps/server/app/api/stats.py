@@ -9,7 +9,6 @@
 
 import csv
 import io
-from datetime import datetime
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import Response
@@ -21,7 +20,7 @@ from autohunt_domain.models import EmailEvent as EmailEventRow
 from autohunt_domain.models import Job
 from autohunt_domain.models import StatusHistory
 from autohunt_domain.models import naive_utc
-from app.api.deps import UI_ONLY
+from app.api.deps import UI_ONLY, parse_rfc3339_query
 from app.auth import require_ui
 from app.config import get_settings
 from app.db import session_for
@@ -62,14 +61,14 @@ FILTERS = {
 }
 
 
-def _filtered_applications(session, channel, from_, to) -> list[ApplicationRow]:
+def _filtered_applications(session, channel, from_dt, to_dt) -> list[ApplicationRow]:
     stmt = select(ApplicationRow)
     if channel is not None:
         stmt = stmt.join(Job, ApplicationRow.job_id == Job.id).where(Job.channel == channel)
-    if from_ is not None:
-        stmt = stmt.where(ApplicationRow.created_at >= naive_utc(datetime.fromisoformat(from_)))
-    if to is not None:
-        stmt = stmt.where(ApplicationRow.created_at <= naive_utc(datetime.fromisoformat(to)))
+    if from_dt is not None:
+        stmt = stmt.where(ApplicationRow.created_at >= naive_utc(from_dt))
+    if to_dt is not None:
+        stmt = stmt.where(ApplicationRow.created_at <= naive_utc(to_dt))
     return session.exec(stmt).all()
 
 
@@ -92,11 +91,11 @@ def _max_rank_reached(session, application: ApplicationRow) -> int:
     return max(ranks, default=0)
 
 
-def _pending_items(session, channel, from_, to) -> int:
+def _pending_items(session, channel, from_dt, to_dt) -> int:
     """待确认投递 + 待确认事件（D-01 红点口径）；筛选作用于两侧。"""
 
     conf_stmt = select(ConfirmationRow).where(ConfirmationRow.status == "待确认")
-    if channel is not None or from_ is not None or to is not None:
+    if channel is not None or from_dt is not None or to_dt is not None:
         conf_stmt = conf_stmt.join(
             ApplicationRow, ConfirmationRow.application_id == ApplicationRow.id
         )
@@ -104,13 +103,13 @@ def _pending_items(session, channel, from_, to) -> int:
             conf_stmt = conf_stmt.join(Job, ApplicationRow.job_id == Job.id).where(
                 Job.channel == channel
             )
-        if from_ is not None:
+        if from_dt is not None:
             conf_stmt = conf_stmt.where(
-                ApplicationRow.created_at >= naive_utc(datetime.fromisoformat(from_))
+                ApplicationRow.created_at >= naive_utc(from_dt)
             )
-        if to is not None:
+        if to_dt is not None:
             conf_stmt = conf_stmt.where(
-                ApplicationRow.created_at <= naive_utc(datetime.fromisoformat(to))
+                ApplicationRow.created_at <= naive_utc(to_dt)
             )
     n_conf = len(session.exec(conf_stmt).all())
 
@@ -119,13 +118,13 @@ def _pending_items(session, channel, from_, to) -> int:
         event_stmt = event_stmt.join(Job, EmailEventRow.matched_job_id == Job.id).where(
             Job.channel == channel
         )
-    if from_ is not None:
+    if from_dt is not None:
         event_stmt = event_stmt.where(
-            EmailEventRow.created_at >= naive_utc(datetime.fromisoformat(from_))
+            EmailEventRow.created_at >= naive_utc(from_dt)
         )
-    if to is not None:
+    if to_dt is not None:
         event_stmt = event_stmt.where(
-            EmailEventRow.created_at <= naive_utc(datetime.fromisoformat(to))
+            EmailEventRow.created_at <= naive_utc(to_dt)
         )
     n_events = len(session.exec(event_stmt).all())
     return n_conf + n_events
@@ -146,12 +145,14 @@ def get_stats_overview(
     to: str | None = FILTERS["to"],
 ) -> StatsOverview:
     require_ui(request)
+    from_dt = parse_rfc3339_query(from_, field="from")
+    to_dt = parse_rfc3339_query(to, field="to")
     with session_for(get_settings().data_dir) as session:
-        apps = _filtered_applications(session, channel, from_, to)
+        apps = _filtered_applications(session, channel, from_dt, to_dt)
         return StatsOverview(
             total_applications=sum(1 for a in apps if a.status != "待投递"),
             in_progress=sum(1 for a in apps if a.status in IN_PROGRESS),
-            pending_items=_pending_items(session, channel, from_, to),
+            pending_items=_pending_items(session, channel, from_dt, to_dt),
             offers=sum(1 for a in apps if a.status in OFFER_STATES),
         )
 
@@ -174,8 +175,10 @@ def get_stats_funnel(
     to: str | None = FILTERS["to"],
 ) -> StatsFunnel:
     require_ui(request)
+    from_dt = parse_rfc3339_query(from_, field="from")
+    to_dt = parse_rfc3339_query(to, field="to")
     with session_for(get_settings().data_dir) as session:
-        apps = _filtered_applications(session, channel, from_, to)
+        apps = _filtered_applications(session, channel, from_dt, to_dt)
         max_ranks = {a.id: _max_rank_reached(session, a) for a in apps}
 
         entered = {
@@ -227,8 +230,10 @@ def export_stats_csv(
     to: str | None = FILTERS["to"],
 ):
     require_ui(request)
+    from_dt = parse_rfc3339_query(from_, field="from")
+    to_dt = parse_rfc3339_query(to, field="to")
     with session_for(get_settings().data_dir) as session:
-        apps = _filtered_applications(session, channel, from_, to)
+        apps = _filtered_applications(session, channel, from_dt, to_dt)
         jobs = {j.id: j for j in session.exec(select(Job)).all()}
 
         buf = io.StringIO()
@@ -250,6 +255,8 @@ def export_stats_csv(
                     a.note or "",
                 ]
             )
+        content = "﻿" + buf.getvalue()  # BOM 便于 Excel 识别 UTF-8
         return CSVResponse(
-            content="﻿" + buf.getvalue(),  # BOM 便于 Excel 识别 UTF-8            headers={"Content-Disposition": 'attachment; filename="applications-export.csv"'},
+            content=content,
+            headers={"Content-Disposition": 'attachment; filename="applications-export.csv"'},
         )

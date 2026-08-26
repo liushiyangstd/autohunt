@@ -1,12 +1,28 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 
 RFC3339 = Annotated[datetime, Field(description="RFC3339 时间戳（UTC 存储）")]
+
+
+def _reject_date_only(value):
+    """D8：submitted_at 拒绝 date-only（如 2026-08-15），须为完整 RFC3339（含时间分量）。"""
+
+    if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value.strip()):
+        raise ValueError("必须是完整 RFC3339 时间戳（含时间分量），不接受 date-only")
+    return value
+
+
+StrictRFC3339 = Annotated[
+    datetime,
+    BeforeValidator(_reject_date_only),
+    Field(description="RFC3339 时间戳（UTC 存储）；须含时间分量（拒绝 date-only）"),
+]
 
 
 class ErrorCode(str, Enum):
@@ -298,6 +314,7 @@ class ConfirmationConfirmed(BaseModel):
 
     status: Literal[ConfirmationStatus.confirmed] = ConfirmationStatus.confirmed
     confirmed_fields: dict[str, str] = Field(description="确认后的字段值（含用户修改）")
+    confirmed_at: RFC3339 = Field(description="确认时间（§10.3；PRD §10.3 / 技设 §4 对齐）")
     submit_token: str | None = Field(
         description="一次性提交许可：绑定 confirmation_id + confirmed_fields 哈希，TTL 30 分钟；已过期/已消耗时为 null"
     )
@@ -345,10 +362,13 @@ class ConfirmationClose(BaseModel):
 
 
 class SubmitResult(BaseModel):
-    submit_token: str
+    submit_token: str | None = Field(
+        default=None,
+        description="一次性提交许可（§3.4 步骤 4）；缺失时 handler 返回 403 PERMIT_REQUIRED（契约语义，非 422）",
+    )
     result: Literal["success", "failed"]
     fail_reason: str | None = Field(default=None, description="result=failed 时必填（FR-24）")
-    submitted_at: RFC3339
+    submitted_at: StrictRFC3339 = Field(description="回写时间；须为完整 RFC3339（拒绝 date-only，D8）")
 
 
 class SubmitResultAck(BaseModel):

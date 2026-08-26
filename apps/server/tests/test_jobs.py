@@ -48,3 +48,19 @@ def test_jobs_pagination(client, ui):
     page3 = client.get(f"/api/v1/jobs?limit=2&cursor={page2['next_cursor']}", **ui).json()
     assert len(page3["items"]) == 1
     assert page3["next_cursor"] is None
+
+
+# ---------- G3 D1：cursor/limit 加固 → 422 ----------
+
+
+def test_jobs_bad_cursor_422(client, ui):
+    resp = client.get("/api/v1/jobs?cursor=abc", **ui)
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_jobs_bad_limit_422(client, ui):
+    for bad in ("0", "-1"):
+        resp = client.get(f"/api/v1/jobs?limit={bad}", **ui)
+        assert resp.status_code == 422
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"

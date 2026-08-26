@@ -6,7 +6,7 @@ from sqlmodel import select
 
 from autohunt_domain.models import Job as JobRow
 from autohunt_domain.models import naive_utc
-from app.api.deps import ANY_CALLER
+from app.api.deps import ANY_CALLER, parse_cursor, parse_limit
 from app.auth import any_caller
 from app.config import get_settings
 from app.db import session_for
@@ -85,13 +85,15 @@ def create_job(request: Request, response: Response, body: JobCreate) -> Job | J
 )
 def list_jobs(request: Request, cursor: str | None = None, limit: int = 50) -> JobList:
     any_caller(request)
+    cursor_seq = parse_cursor(cursor)
+    page_size = parse_limit(limit)
     with session_for(get_settings().data_dir) as session:
         stmt = select(JobRow).order_by(JobRow.seq)
-        if cursor is not None:
-            stmt = stmt.where(JobRow.seq > int(cursor))
-        rows = session.exec(stmt.limit(limit + 1)).all()
-        items, next_cursor = rows[:limit], None
-        if len(rows) > limit:
+        if cursor_seq is not None:
+            stmt = stmt.where(JobRow.seq > cursor_seq)
+        rows = session.exec(stmt.limit(page_size + 1)).all()
+        items, next_cursor = rows[:page_size], None
+        if len(rows) > page_size:
             next_cursor = str(items[-1].seq)
         return JobList(items=[_to_schema(row) for row in items], next_cursor=next_cursor)
 

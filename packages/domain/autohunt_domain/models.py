@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Column
+from sqlalchemy import JSON, Column, ForeignKey, String
 from sqlmodel import Field, SQLModel
 
 
@@ -163,7 +163,16 @@ class EmailEvent(SQLModel, table=True):
 
     seq: int | None = Field(default=None, primary_key=True)
     id: str = Field(default_factory=new_id, unique=True, index=True)
-    account_id: str = Field(foreign_key="email_account.id", index=True)
+    account_id: str | None = Field(
+        default=None,
+        sa_column=Column(
+            "account_id",
+            String,
+            ForeignKey("email_account.id", ondelete="SET NULL"),
+            index=True,
+            nullable=True,
+        ),
+    )
     message_id: str = Field(unique=True, index=True)
     content_hash: str | None = Field(default=None, index=True)  # 去重兜底（§6 步骤 4）
     type: str  # 测评/笔试/面试/offer/拒信

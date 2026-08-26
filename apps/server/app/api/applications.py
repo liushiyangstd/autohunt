@@ -7,8 +7,6 @@
 - `GET /applications/{id}/emails` 关联邮件回溯（FR-43，按岗位匹配）。
 """
 
-from datetime import datetime
-
 from fastapi import APIRouter, Header, Query, Request, status
 from sqlmodel import select
 
@@ -18,11 +16,11 @@ from autohunt_domain.models import EmailEvent as EmailEventRow
 from autohunt_domain.models import Job as JobRow
 from autohunt_domain.models import StatusHistory as StatusHistoryRow
 from autohunt_domain.models import naive_utc, utcnow
-from app.api.deps import ANY_CALLER, AGENT_ONLY
+from app.api.deps import ANY_CALLER, AGENT_ONLY, parse_cursor, parse_limit, parse_rfc3339_query
 from app.auth import any_caller, caller_of, require_agent
 from app.config import get_settings
 from app.db import session_for
-from app.errors import not_found, validation_error
+from app.errors import not_found, permit_required, validation_error
 from app.schemas import (
     Application,
     ApplicationCreate,
@@ -118,25 +116,29 @@ def list_applications(
     limit: int = 50,
 ) -> ApplicationList:
     any_caller(request)
+    from_dt = parse_rfc3339_query(from_, field="from")
+    to_dt = parse_rfc3339_query(to, field="to")
+    cursor_seq = parse_cursor(cursor)
+    page_size = parse_limit(limit)
     with session_for(get_settings().data_dir) as session:
         stmt = select(ApplicationRow).order_by(ApplicationRow.seq)
         if status_ is not None:
             stmt = stmt.where(ApplicationRow.status == status_.value)
-        if from_ is not None:
-            stmt = stmt.where(ApplicationRow.applied_at >= naive_utc(datetime.fromisoformat(from_)))
-        if to is not None:
-            stmt = stmt.where(ApplicationRow.applied_at <= naive_utc(datetime.fromisoformat(to)))
+        if from_dt is not None:
+            stmt = stmt.where(ApplicationRow.applied_at >= naive_utc(from_dt))
+        if to_dt is not None:
+            stmt = stmt.where(ApplicationRow.applied_at <= naive_utc(to_dt))
         if company is not None or channel is not None:
             stmt = stmt.join(JobRow, ApplicationRow.job_id == JobRow.id)
             if company is not None:
                 stmt = stmt.where(JobRow.company == company)
             if channel is not None:
                 stmt = stmt.where(JobRow.channel == channel)
-        if cursor is not None:
-            stmt = stmt.where(ApplicationRow.seq > int(cursor))
-        rows = session.exec(stmt.limit(limit + 1)).all()
-        items, next_cursor = rows[:limit], None
-        if len(rows) > limit:
+        if cursor_seq is not None:
+            stmt = stmt.where(ApplicationRow.seq > cursor_seq)
+        rows = session.exec(stmt.limit(page_size + 1)).all()
+        items, next_cursor = rows[:page_size], None
+        if len(rows) > page_size:
             next_cursor = str(items[-1].seq)
         return ApplicationList(items=[_to_schema(row) for row in items], next_cursor=next_cursor)
 
@@ -223,6 +225,9 @@ def update_application(
 )
 def submit_result(request: Request, application_id: str, body: SubmitResult) -> SubmitResultAck:
     require_agent(request)
+    # §3.4：submit_token 缺失 → 403 PERMIT_REQUIRED（契约语义，非 422 请求体校验）
+    if not body.submit_token:
+        raise permit_required()
     if body.result == "failed" and not body.fail_reason:
         raise validation_error("result=failed 时 fail_reason 必填（FR-24）")
     settings = get_settings()

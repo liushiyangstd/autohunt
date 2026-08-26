@@ -449,3 +449,51 @@ def test_confirmed_detail_carries_submit_result(client, ui, agent):
     assert after["submit_result"] == "failed"
     assert after["fail_reason"] == "目标站点验证码拦截"
     assert after["submitted_at"] is not None
+
+
+# ---------- G3 复核：列表分页加固 / D7 / D8 / D9 ----------
+
+
+def test_list_confirmations_bad_cursor_limit_422(client, ui):
+    resp = client.get("/api/v1/confirmations?cursor=abc", **ui)
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+    for bad in ("0", "-1"):
+        resp = client.get(f"/api/v1/confirmations?limit={bad}", **ui)
+        assert resp.status_code == 422
+        assert resp.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_submit_result_missing_token_403(client, ui, agent):
+    """D7：submit_token 缺失（schema 非必填）→ 403 PERMIT_REQUIRED（契约语义，非 422）。"""
+    app_id, _, _ = _confirmed(client, ui, agent)
+    resp = client.post(
+        f"/api/v1/applications/{app_id}/submit-result",
+        json={"result": "success", "submitted_at": "2026-08-25T14:00:00"},
+        **agent,
+    )
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "PERMIT_REQUIRED"
+
+
+def test_submit_result_date_only_submitted_at_422(client, ui, agent):
+    """D8：submitted_at 拒绝 date-only，须为完整 RFC3339（FastAPI 默认 422）。"""
+    app_id, _, confirmed = _confirmed(client, ui, agent)
+    resp = client.post(
+        f"/api/v1/applications/{app_id}/submit-result",
+        json={"submit_token": confirmed["submit_token"], "result": "success",
+              "submitted_at": "2026-08-25"},
+        **agent,
+    )
+    assert resp.status_code == 422
+
+
+def test_confirmed_carries_confirmed_at(client, ui, agent):
+    """D9：ConfirmationConfirmed 响应（confirm 直返 + GET 轮询）均含 confirmed_at。"""
+    _, confirmation_id, confirmed = _confirmed(client, ui, agent)
+    assert "confirmed_at" in confirmed
+    assert confirmed["confirmed_at"] is not None
+
+    polled = client.get(f"/api/v1/confirmations/{confirmation_id}", **ui).json()
+    assert polled["status"] == "已确认"
+    assert polled["confirmed_at"] == confirmed["confirmed_at"]

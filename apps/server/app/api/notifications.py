@@ -18,7 +18,7 @@ from autohunt_domain.models import Job
 from autohunt_domain.models import Notification as NotificationRow
 from autohunt_domain.models import ScheduleEvent as ScheduleEventRow
 from autohunt_domain.models import naive_utc, utcnow
-from app.api.deps import UI_ONLY
+from app.api.deps import UI_ONLY, parse_cursor, parse_limit
 from app.auth import require_ui
 from app.config import get_settings
 from app.db import session_for
@@ -47,6 +47,8 @@ DEADLINE_WINDOW = timedelta(hours=24)
 )
 def list_notifications(request: Request, cursor: str | None = None, limit: int = 50) -> NotificationList:
     require_ui(request)
+    cursor_int = parse_cursor(cursor)
+    page_size = parse_limit(limit)
     with session_for(get_settings().data_dir) as session:
         now = utcnow().replace(tzinfo=None)
         prefs_row = session.exec(select(AppSetting).where(AppSetting.key == "reminders")).first()
@@ -60,6 +62,10 @@ def list_notifications(request: Request, cursor: str | None = None, limit: int =
             .order_by(NotificationRow.seq)
         ).all()
         for row in fired:
+            # D5：按 schedule_24h / schedule_1h 偏好过滤（与生成侧 events.py 口径一致）；
+            # 被过滤的保持「待触发」，重开偏好后可恢复提醒。
+            if not prefs.get("schedule_24h" if row.kind == "24h" else "schedule_1h", True):
+                continue
             schedule = session.exec(
                 select(ScheduleEventRow).where(ScheduleEventRow.id == row.schedule_event_id)
             ).first()
@@ -106,7 +112,7 @@ def list_notifications(request: Request, cursor: str | None = None, limit: int =
         session.commit()
 
         items.sort(key=lambda n: naive_utc(n.fire_at), reverse=True)
-        offset = int(cursor) if cursor else 0
-        page = items[offset : offset + limit]
-        next_cursor = str(offset + limit) if offset + limit < len(items) else None
+        offset = cursor_int or 0
+        page = items[offset : offset + page_size]
+        next_cursor = str(offset + page_size) if offset + page_size < len(items) else None
         return NotificationList(items=page, next_cursor=next_cursor)

@@ -5,9 +5,11 @@ auth_failed 账户暂停轮询（imap_worker.sync_all_active 只跑 active）。
 """
 
 from fastapi import APIRouter, Request
+from sqlalchemy import update
 from sqlmodel import select
 
 from autohunt_domain.models import EmailAccount
+from autohunt_domain.models import EmailEvent as EmailEventRow
 from app.api.deps import UI_ONLY
 from app.auth import require_ui
 from app.config import get_settings
@@ -156,5 +158,9 @@ def unbind_email_account(request: Request, account_id: str) -> None:
         row = session.exec(select(EmailAccount).where(EmailAccount.id == account_id)).first()
         if row is None:
             raise not_found("邮箱账户不存在")
-        session.delete(row)  # 历史 email_event/schedule_event 保留（AC-8）
+        # AC-8：历史事件保留 —— 先清空关联事件 account_id（FK SET NULL 兜底，双保险），再删账户
+        session.execute(
+            update(EmailEventRow).where(EmailEventRow.account_id == account_id).values(account_id=None)
+        )
+        session.delete(row)
         session.commit()

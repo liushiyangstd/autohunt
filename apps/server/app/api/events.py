@@ -4,7 +4,7 @@
 关联投递按 §5 以 email 来源推进状态（被状态机拒绝的推进落 rejected history，不影响确认本身）。
 """
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Query, Request
@@ -17,7 +17,7 @@ from autohunt_domain.models import EmailEvent as EmailEventRow
 from autohunt_domain.models import Notification as NotificationRow
 from autohunt_domain.models import ScheduleEvent as ScheduleEventRow
 from autohunt_domain.models import naive_utc, utcnow
-from app.api.deps import ANY_CALLER, UI_ONLY
+from app.api.deps import ANY_CALLER, UI_ONLY, parse_cursor, parse_limit, parse_rfc3339_query
 from app.auth import any_caller, require_ui
 from app.config import get_settings
 from app.db import session_for
@@ -107,17 +107,19 @@ def _get_event_or_404(session, event_id: str) -> EmailEventRow:
 )
 def list_pending_events(request: Request, cursor: str | None = None, limit: int = 50) -> EmailEventList:
     any_caller(request)
+    cursor_seq = parse_cursor(cursor)
+    page_size = parse_limit(limit)
     with session_for(get_settings().data_dir) as session:
         stmt = (
             select(EmailEventRow)
             .where(EmailEventRow.status == EmailEventStatus.pending.value)
             .order_by(EmailEventRow.seq)
         )
-        if cursor is not None:
-            stmt = stmt.where(EmailEventRow.seq > int(cursor))
-        rows = session.exec(stmt.limit(limit + 1)).all()
-        items, next_cursor = rows[:limit], None
-        if len(rows) > limit:
+        if cursor_seq is not None:
+            stmt = stmt.where(EmailEventRow.seq > cursor_seq)
+        rows = session.exec(stmt.limit(page_size + 1)).all()
+        items, next_cursor = rows[:page_size], None
+        if len(rows) > page_size:
             next_cursor = str(items[-1].seq)
         return EmailEventList(
             items=[
@@ -152,12 +154,14 @@ def get_schedule(
     to: str | None = Query(default=None, description="RFC3339 止"),
 ) -> ScheduleEventList:
     any_caller(request)
+    from_dt = parse_rfc3339_query(from_, field="from")
+    to_dt = parse_rfc3339_query(to, field="to")
     with session_for(get_settings().data_dir) as session:
         stmt = select(ScheduleEventRow).order_by(ScheduleEventRow.start_time)
-        if from_ is not None:
-            stmt = stmt.where(ScheduleEventRow.start_time >= naive_utc(datetime.fromisoformat(from_)))
-        if to is not None:
-            stmt = stmt.where(ScheduleEventRow.start_time <= naive_utc(datetime.fromisoformat(to)))
+        if from_dt is not None:
+            stmt = stmt.where(ScheduleEventRow.start_time >= naive_utc(from_dt))
+        if to_dt is not None:
+            stmt = stmt.where(ScheduleEventRow.start_time <= naive_utc(to_dt))
         rows = session.exec(stmt).all()
         return ScheduleEventList(
             items=[

@@ -20,7 +20,7 @@ from sqlmodel import select
 from autohunt_domain.models import Application as ApplicationRow
 from autohunt_domain.models import Confirmation as ConfirmationRow
 from autohunt_domain.models import utcnow
-from app.api.deps import ANY_CALLER, UI_ONLY
+from app.api.deps import ANY_CALLER, UI_ONLY, parse_cursor, parse_limit
 from app.auth import any_caller, caller_of, require_ui
 from app.config import get_settings
 from app.db import session_for
@@ -73,6 +73,7 @@ def _to_detail(request: Request, row: ConfirmationRow) -> ConfirmationDetail:
         token = permits.readable_token(settings.data_dir, row)
         return ConfirmationConfirmed(
             confirmed_fields=row.confirmed_fields or {},
+            confirmed_at=row.confirmed_at,
             submit_token=token,
             expires_at=row.token_expires_at,
             submit_result=row.submit_result,
@@ -152,15 +153,17 @@ def list_confirmations(
     limit: int = 50,
 ) -> ConfirmationList:
     require_ui(request)
+    cursor_seq = parse_cursor(cursor)
+    page_size = parse_limit(limit)
     with session_for(get_settings().data_dir) as session:
         stmt = select(ConfirmationRow).order_by(ConfirmationRow.seq)
         if status_ is not None:
             stmt = stmt.where(ConfirmationRow.status == status_.value)
-        if cursor is not None:
-            stmt = stmt.where(ConfirmationRow.seq > int(cursor))
-        rows = session.exec(stmt.limit(limit + 1)).all()
-        items, next_cursor = rows[:limit], None
-        if len(rows) > limit:
+        if cursor_seq is not None:
+            stmt = stmt.where(ConfirmationRow.seq > cursor_seq)
+        rows = session.exec(stmt.limit(page_size + 1)).all()
+        items, next_cursor = rows[:page_size], None
+        if len(rows) > page_size:
             next_cursor = str(items[-1].seq)
         return ConfirmationList(
             items=[
@@ -226,7 +229,10 @@ def confirm(request: Request, confirmation_id: str, body: ConfirmationConfirm) -
             session, settings.data_dir, row, settings.submit_token_ttl_seconds
         )
         return ConfirmationConfirmed(
-            confirmed_fields=row.confirmed_fields, submit_token=token, expires_at=expires_at
+            confirmed_fields=row.confirmed_fields,
+            confirmed_at=row.confirmed_at,
+            submit_token=token,
+            expires_at=expires_at,
         )
 
 
@@ -287,7 +293,10 @@ def reissue(request: Request, confirmation_id: str) -> ConfirmationConfirmed:
             session, settings.data_dir, row, settings.submit_token_ttl_seconds
         )
         return ConfirmationConfirmed(
-            confirmed_fields=row.confirmed_fields or {}, submit_token=token, expires_at=expires_at
+            confirmed_fields=row.confirmed_fields or {},
+            confirmed_at=row.confirmed_at,
+            submit_token=token,
+            expires_at=expires_at,
         )
 
 

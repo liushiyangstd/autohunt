@@ -4205,6 +4205,12 @@
             "title": "Confirmed Fields",
             "description": "确认后的字段值（含用户修改）"
           },
+          "confirmed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Confirmed At",
+            "description": "确认时间（§10.3；PRD §10.3 / 技设 §4 对齐）"
+          },
           "submit_token": {
             "anyOf": [
               {
@@ -4269,6 +4275,7 @@
         "type": "object",
         "required": [
           "confirmed_fields",
+          "confirmed_at",
           "submit_token",
           "expires_at"
         ],
@@ -6337,8 +6344,16 @@
       "SubmitResult": {
         "properties": {
           "submit_token": {
-            "type": "string",
-            "title": "Submit Token"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submit Token",
+            "description": "一次性提交许可（§3.4 步骤 4）；缺失时 handler 返回 403 PERMIT_REQUIRED（契约语义，非 422）"
           },
           "result": {
             "type": "string",
@@ -6364,12 +6379,11 @@
             "type": "string",
             "format": "date-time",
             "title": "Submitted At",
-            "description": "RFC3339 时间戳（UTC 存储）"
+            "description": "回写时间；须为完整 RFC3339（拒绝 date-only，D8）"
           }
         },
         "type": "object",
         "required": [
-          "submit_token",
           "result",
           "submitted_at"
         ],
