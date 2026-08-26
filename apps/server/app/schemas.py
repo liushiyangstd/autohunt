@@ -611,16 +611,6 @@ class ReminderSettings(BaseModel):
     include_deadline: bool = Field(default=True, description="是否在提醒中包含网申截止提醒")
 
 
-class LLMConfig(BaseModel):
-    """LLM 配置存储结构（AppSetting key='llm'，PROX-8 schema）。"""
-
-    enabled: bool = Field(default=False, description="是否启用 LLM 解析")
-    provider: str = Field(default="openai", description="SDK 提供商标识，目前仅 openai 兼容")
-    base_url: str | None = Field(default=None, description="自定义 OpenAI 兼容 API 基础地址")
-    model: str = Field(default="gpt-4o-mini", description="模型名")
-    api_key_enc: str | None = Field(default=None, description="Fernet 加密后的 API Key")
-
-
 # ---------- UI session 引导（根因修复：浏览器首访签发 cookie） ----------
 
 
