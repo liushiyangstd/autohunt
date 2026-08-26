@@ -1,19 +1,29 @@
-"""邮箱事件与日程（FR-42/43，§3.5 —— UI 为主，Agent 只读）。"""
+"""邮箱事件与日程（FR-42/43，§3.5 —— UI 为主，Agent 只读）。
 
-from datetime import datetime
+事件确认副作用（BR-2）：事件 → 已确认、生成 schedule_event、按提醒偏好建 24h/1h 提醒、
+关联投递按 §5 以 email 来源推进状态（被状态机拒绝的推进落 rejected history，不影响确认本身）。
+"""
+
+from datetime import datetime, timedelta
+from pathlib import Path
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import PlainTextResponse
 from sqlmodel import select
 
+from autohunt_domain.models import AppSetting
+from autohunt_domain.models import Application as ApplicationRow
 from autohunt_domain.models import EmailEvent as EmailEventRow
+from autohunt_domain.models import Notification as NotificationRow
 from autohunt_domain.models import ScheduleEvent as ScheduleEventRow
-from autohunt_domain.models import naive_utc
+from autohunt_domain.models import naive_utc, utcnow
 from app.api.deps import ANY_CALLER, UI_ONLY
 from app.auth import any_caller, require_ui
 from app.config import get_settings
 from app.db import session_for
+from app.errors import ApiError, not_found, state_conflict
 from app.schemas import (
+    ApplicationStatus,
     EmailEvent,
     EmailEventConfirm,
     EmailEventConfirmResult,
@@ -26,12 +36,65 @@ from app.schemas import (
     ScheduleEvent,
     ScheduleEventList,
 )
+from app.services import statemachine
 
 router = APIRouter(tags=["events", "schedule"])
 
 COMMON_ERRORS = {
     401: {"model": ErrorEnvelope, "description": "UNAUTHORIZED — 未携带有效凭证"},
 }
+
+# 事件类型 → 投递状态推进目标（§5 email 来源；测评无对应状态不推进）
+_TYPE_TO_STATUS: dict[str, ApplicationStatus] = {
+    "笔试": ApplicationStatus.written_test,
+    "面试": ApplicationStatus.interview,
+    "offer": ApplicationStatus.offer,
+    "拒信": ApplicationStatus.rejected,  # email 白名单允许进入「已拒绝」（§5）
+}
+
+
+def _to_event_schema(row: EmailEventRow) -> EmailEvent:
+    return EmailEvent(
+        id=row.id,
+        type=EmailEventType(row.type),
+        event_time=row.event_time,
+        location=row.location,
+        meeting_link=row.meeting_link,
+        company=row.company,
+        matched_job_id=row.matched_job_id,
+        status=EmailEventStatus(row.status),
+        created_at=row.created_at,
+    )
+
+
+def _to_detail_schema(row: EmailEventRow) -> EmailEventDetail:
+    return EmailEventDetail(
+        **_to_event_schema(row).model_dump(),
+        email_subject=row.email_subject,
+        email_sender=row.email_sender,
+        email_received_at=row.email_received_at,
+    )
+
+
+def _to_schedule_schema(row: ScheduleEventRow) -> ScheduleEvent:
+    return ScheduleEvent(
+        id=row.id,
+        application_id=row.application_id,
+        source_event_id=row.source_event_id,
+        title=row.title,
+        type=EmailEventType(row.type),
+        start_time=row.start_time,
+        end_time=row.end_time,
+        location=row.location,
+        meeting_link=row.meeting_link,
+    )
+
+
+def _get_event_or_404(session, event_id: str) -> EmailEventRow:
+    row = session.exec(select(EmailEventRow).where(EmailEventRow.id == event_id)).first()
+    if row is None:
+        raise not_found("事件不存在")
+    return row
 
 
 @router.get(
@@ -139,7 +202,8 @@ EVENT_CONFLICT = {
 )
 def get_event(request: Request, event_id: str) -> EmailEventDetail:
     any_caller(request)
-    ...  # M4 实现
+    with session_for(get_settings().data_dir) as session:
+        return _to_detail_schema(_get_event_or_404(session, event_id))
 
 
 @router.get(
@@ -155,7 +219,14 @@ def get_event(request: Request, event_id: str) -> EmailEventDetail:
 )
 def get_event_raw(request: Request, event_id: str):
     require_ui(request)
-    ...  # M4 实现
+    settings = get_settings()
+    with session_for(settings.data_dir) as session:
+        row = _get_event_or_404(session, event_id)
+        raw_path = row.raw_path
+    if not raw_path or not (Path(settings.data_dir) / raw_path).exists():
+        raise not_found("原始邮件存档不存在")
+    content = (Path(settings.data_dir) / raw_path).read_bytes()
+    return PlainTextResponse(content=content.decode("utf-8", errors="replace"))
 
 
 @router.post(
@@ -172,7 +243,80 @@ def get_event_raw(request: Request, event_id: str):
 )
 def confirm_event(request: Request, event_id: str, body: EmailEventConfirm) -> EmailEventConfirmResult:
     require_ui(request)
-    ...  # M4 实现
+    with session_for(get_settings().data_dir) as session:
+        row = _get_event_or_404(session, event_id)
+        if row.status != EmailEventStatus.pending.value:
+            raise state_conflict("事件非「待确认」态，不可重复确认/丢弃")
+
+        # 「修正后加入」：body 中提供的字段覆盖识别值
+        if body.type is not None:
+            row.type = body.type.value
+        if body.event_time is not None:
+            row.event_time = naive_utc(body.event_time)
+        if body.location is not None:
+            row.location = body.location
+        if body.meeting_link is not None:
+            row.meeting_link = body.meeting_link
+        if body.company is not None:
+            row.company = body.company
+        if body.matched_job_id is not None:
+            row.matched_job_id = body.matched_job_id
+        row.status = EmailEventStatus.confirmed.value
+
+        # 关联投递（matched_job_id → 该岗位最新投递）
+        application = None
+        if row.matched_job_id is not None:
+            application = session.exec(
+                select(ApplicationRow)
+                .where(ApplicationRow.job_id == row.matched_job_id)
+                .order_by(ApplicationRow.seq.desc())
+            ).first()
+
+        # BR-2：确认后生成日程事件；无明确时间时回退收件时间/当前时间（统一 naive UTC 存储）
+        start_time = naive_utc(row.event_time or row.email_received_at or utcnow())
+        schedule = ScheduleEventRow(
+            application_id=application.id if application else None,
+            source_event_id=row.id,
+            title=f"{row.company} {row.type}" if row.company else row.type,
+            type=row.type,
+            start_time=start_time,
+            location=row.location,
+            meeting_link=row.meeting_link,
+        )
+        session.add(schedule)
+        session.flush()
+
+        # FR-32：按提醒偏好创建 24h/1h 两级提醒（fire_at 已过的不补发）
+        settings_row = session.exec(select(AppSetting).where(AppSetting.key == "reminders")).first()
+        prefs = settings_row.value if settings_row else {}
+        now = utcnow().replace(tzinfo=None)
+        start_naive = start_time
+        for kind, delta, enabled_key in (
+            ("24h", timedelta(hours=24), "schedule_24h"),
+            ("1h", timedelta(hours=1), "schedule_1h"),
+        ):
+            fire_at = start_naive - delta
+            if prefs.get(enabled_key, True) and fire_at > now:
+                session.add(
+                    NotificationRow(schedule_event_id=schedule.id, kind=kind, fire_at=fire_at)
+                )
+        session.add(row)
+        session.commit()
+
+        # §5：关联投递按 email 来源推进状态；被状态机拒绝（回退/白名单外）时
+        # apply_transition 已落 rejected history，确认本身不受影响（事件仍已确认）
+        target = _TYPE_TO_STATUS.get(row.type)
+        if application is not None and target is not None:
+            try:
+                statemachine.apply_transition(session, application, target, "email")
+            except ApiError:
+                pass
+
+        session.refresh(row)
+        session.refresh(schedule)
+        return EmailEventConfirmResult(
+            event=_to_event_schema(row), schedule_event=_to_schedule_schema(schedule)
+        )
 
 
 @router.post(
@@ -185,4 +329,13 @@ def confirm_event(request: Request, event_id: str, body: EmailEventConfirm) -> E
 )
 def discard_event(request: Request, event_id: str, body: EmailEventDiscard) -> EmailEvent:
     require_ui(request)
-    ...  # M4 实现
+    with session_for(get_settings().data_dir) as session:
+        row = _get_event_or_404(session, event_id)
+        if row.status != EmailEventStatus.pending.value:
+            raise state_conflict("事件非「待确认」态，不可重复确认/丢弃")
+        row.status = EmailEventStatus.discarded.value
+        row.discard_reason = body.reason  # 误识别反馈留存（KPI-2 数据源）
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return _to_event_schema(row)

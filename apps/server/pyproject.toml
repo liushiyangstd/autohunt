@@ -8,6 +8,7 @@ dependencies = [
     "sqlmodel>=0.0.22",
     "cryptography>=42",
     "python-multipart>=0.0.9",
+    "pypdf>=4",
     "autohunt-domain",
 ]
 
