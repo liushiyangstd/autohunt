@@ -243,3 +243,17 @@ export const httpApi: AutohuntApi = {
   getReminders: () => req<ReminderSettings>('/settings/reminders'),
   putReminders: (body) => req<ReminderSettings>('/settings/reminders', { method: 'PUT', body: JSON.stringify(body) }),
 };
+
+/**
+ * UI session 引导（契约新增 GET /ui/session）：浏览器首次访问时后端从未签发过
+ * ah_session cookie，所有 /api/v1 请求会被鉴权中间件 401。应用启动时先调用本函数
+ * 换取 Set-Cookie，再发起数据查询。失败（后端未就绪 / 网络错误）静默 —— 不阻断
+ * 首帧，数据请求会照常收到鉴权错误。
+ */
+export async function ensureUiSession(): Promise<void> {
+  try {
+    await fetch(`${BASE}/ui/session`, { credentials: 'include' });
+  } catch {
+    // 网络错误：后端未启动或暂不可达，交由后续数据请求自行报告
+  }
+}

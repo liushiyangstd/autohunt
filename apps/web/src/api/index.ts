@@ -4,4 +4,4 @@ import { isMockMode, mockApi } from './mock';
 export const api = isMockMode() ? mockApi : httpApi;
 export const mockMode = isMockMode();
 export * from './types';
-export { ApiError } from './client';
+export { ApiError, ensureUiSession } from './client';
