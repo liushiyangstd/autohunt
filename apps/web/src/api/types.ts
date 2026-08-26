@@ -354,3 +354,30 @@ export interface ReminderSettings {
   schedule_1h: boolean;
   include_deadline: boolean;
 }
+
+// ---- 契约 v2 增补：LLM 解析配置（PROX-8/PROX-12） ----
+
+export interface LLMConfig {
+  enabled: boolean;
+  provider: string;
+  base_url?: string | null;
+  model: string;
+  api_key_last4?: string | null;
+  timeout_seconds: number;
+  max_tokens: number;
+}
+
+export interface LLMConfigUpdate {
+  enabled?: boolean | null;
+  provider?: string | null;
+  base_url?: string | null;
+  model?: string | null;
+  api_key?: string | null;
+  timeout_seconds?: number | null;
+  max_tokens?: number | null;
+}
+
+export interface LLMConfigTestResult {
+  ok: boolean;
+  error?: string | null;
+}

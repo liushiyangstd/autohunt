@@ -13,7 +13,7 @@ import type {
   ConfirmationStatus, EmailAccountBind, EmailAccountInfo, EmailAccountList,
   EmailAccountReauth, EmailEvent, EmailEventConfirm, EmailEventDetail,
   EmailEventDetailList, EmailEventDiscard, EmailEventList, Job, JobCreate, JobList,
-  JobUpdate, NotificationList, Profile, ProfileResponse, ProfileUpdate, ReminderSettings,
+  JobUpdate, LLMConfig, LLMConfigTestResult, LLMConfigUpdate, NotificationList, Profile, ProfileResponse, ProfileUpdate, ReminderSettings,
   ResumeInfo, ResumeList, ResumeUpdate, ScheduleEvent, ScheduleEventList,
   StatsFilter, StatsFunnel, StatsOverview, StatusHistoryEntry, StatusHistoryList,
   CreateJobResult, ConfirmationView,
@@ -132,6 +132,7 @@ const mutable = {
     { id: 'ea-1', email: 'qiuzhi@example.com', imap_host: 'imap.example.com', port: 993, status: 'active', last_sync_at: hoursAgo(1), created_at: hoursAgo(300) },
   ] as EmailAccountInfo[],
   reminders: { schedule_24h: true, schedule_1h: true, include_deadline: true } as ReminderSettings,
+  llm: { enabled: false, provider: 'openai', base_url: null, model: 'gpt-4o-mini', api_key_last4: null, timeout_seconds: 15, max_tokens: 2048 } as LLMConfig,
 };
 
 const delay = <T>(v: T): Promise<T> => new Promise((r) => setTimeout(() => r(v), 120));
@@ -494,6 +495,17 @@ export const mockApi: AutohuntApi = {
     mutable.reminders = { ...body };
     return delay({ ...mutable.reminders });
   },
+
+  getLLMConfig: () => delay({ ...mutable.llm }),
+  putLLMConfig: (body: LLMConfigUpdate) => {
+    mutable.llm = {
+      ...mutable.llm,
+      ...Object.fromEntries(Object.entries(body).filter(([, v]) => v !== undefined)),
+      api_key_last4: body.api_key ? body.api_key.slice(-4) : mutable.llm.api_key_last4,
+    };
+    return delay({ ...mutable.llm });
+  },
+  testLLMConfig: () => delay({ ok: false, error: 'mock 环境不支持真实 LLM 连接测试' } as LLMConfigTestResult),
 };
 
 export function isMockMode(): boolean {

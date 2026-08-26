@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, ApiError, type ApiKeyCreated } from '../api';
+import { api, ApiError, type ApiKeyCreated, type LLMConfigUpdate } from '../api';
 import Modal from '../components/Modal';
 import { Skeleton } from '../components/Feedback';
 import { fmtDateTime } from '../utils/time';
@@ -10,6 +10,7 @@ export default function Settings() {
   return (
     <div style={{ display: 'grid', gap: 24 }}>
       <EmailBinding />
+      <LLMConfig />
       <ApiKeys />
       <ReminderPrefs />
       <DataManagement />
@@ -33,6 +34,137 @@ function EmailBinding() {
       <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
         <button disabled title="待契约扩展">测试连接</button>
         <button className="btn-primary" disabled title="待契约扩展">绑定</button>
+      </div>
+    </section>
+  );
+}
+
+/** LLM 解析配置（PROX-12）—— 用户自带 API Key */
+function LLMConfig() {
+  const qc = useQueryClient();
+  const cfg = useQuery({ queryKey: ['llm-config'], queryFn: () => api.getLLMConfig(), retry: false });
+  const [form, setForm] = useState<LLMConfigUpdate>({});
+  const [error, setError] = useState<string | null>(null);
+  const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const saveMut = useMutation({
+    mutationFn: (body: LLMConfigUpdate) => api.putLLMConfig(body),
+    onSuccess: () => {
+      setForm({});
+      setError(null);
+      qc.invalidateQueries({ queryKey: ['llm-config'] });
+    },
+    onError: (e) => setError(e instanceof ApiError ? e.message : String(e)),
+  });
+
+  const testMut = useMutation({
+    mutationFn: () => api.testLLMConfig(),
+    onSuccess: (r) => setTestMsg({ ok: r.ok, text: r.ok ? '连接成功' : (r.error ?? '连接失败') }),
+    onError: (e) => setTestMsg({ ok: false, text: e instanceof ApiError ? e.message : String(e) }),
+  });
+
+  if (cfg.isLoading) return <section className="card" style={{ padding: 20 }}><Skeleton lines={3} /></section>;
+  if (cfg.isError) return <section className="card" style={{ padding: 20 }}><div className="banner banner-danger">LLM 配置加载失败：{cfg.error instanceof ApiError ? cfg.error.message : '未知错误'}</div></section>;
+  if (!cfg.data) return <section className="card" style={{ padding: 20 }}><div className="banner banner-danger">LLM 配置数据异常</div></section>;
+
+  const current = cfg.data;
+  const changed = Object.keys(form).length > 0;
+
+  const update = <K extends keyof LLMConfigUpdate>(k: K, v: LLMConfigUpdate[K]) => {
+    setForm((prev) => ({ ...prev, [k]: v === '' ? null : v }));
+    setTestMsg(null);
+  };
+
+  const save = () => {
+    const body: LLMConfigUpdate = { ...form };
+    if (body.api_key === '') body.api_key = null;
+    saveMut.mutate(body);
+  };
+
+  return (
+    <section className="card" style={{ padding: 20 }}>
+      <h3 className="section-title">LLM 解析配置</h3>
+      <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginTop: -8, marginBottom: 12 }}>
+        API Key 仅加密存储在本地，由您自担调用成本；未配置 Key 时上传的简历将标记为解析失败。
+      </p>
+
+      <div className="form-grid">
+        <div className="form-field">
+          <label>启用 LLM 解析</label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={form.enabled ?? current.enabled}
+              onChange={(e) => update('enabled', e.target.checked)}
+            />
+            启用
+          </label>
+        </div>
+        <div className="form-field">
+          <label>提供方</label>
+          <input
+            value={form.provider ?? current.provider ?? ''}
+            onChange={(e) => update('provider', e.target.value)}
+            placeholder="openai"
+          />
+        </div>
+        <div className="form-field">
+          <label>Base URL（可选，兼容第三方代理）</label>
+          <input
+            value={form.base_url ?? current.base_url ?? ''}
+            onChange={(e) => update('base_url', e.target.value)}
+            placeholder="https://api.openai.com/v1"
+          />
+        </div>
+        <div className="form-field">
+          <label>模型</label>
+          <input
+            value={form.model ?? current.model ?? ''}
+            onChange={(e) => update('model', e.target.value)}
+            placeholder="gpt-4o-mini"
+          />
+        </div>
+        <div className="form-field">
+          <label>API Key{current.api_key_last4 && <span style={{ color: 'var(--color-text-secondary)', fontWeight: 'normal' }}>（已配置 ···{current.api_key_last4}）</span>}</label>
+          <input
+            type="password"
+            value={form.api_key ?? ''}
+            onChange={(e) => update('api_key', e.target.value)}
+            placeholder={current.api_key_last4 ? '留空则保留原 Key' : 'sk-...'}
+          />
+        </div>
+        <div className="form-field">
+          <label>超时（秒）</label>
+          <input
+            type="number"
+            min={1}
+            value={form.timeout_seconds ?? current.timeout_seconds ?? 15}
+            onChange={(e) => update('timeout_seconds', Number(e.target.value))}
+          />
+        </div>
+        <div className="form-field">
+          <label>最大 tokens</label>
+          <input
+            type="number"
+            min={1}
+            value={form.max_tokens ?? current.max_tokens ?? 2048}
+            onChange={(e) => update('max_tokens', Number(e.target.value))}
+          />
+        </div>
+      </div>
+
+      {testMsg && (
+        <div className={`banner ${testMsg.ok ? 'banner-success' : 'banner-danger'}`} style={{ marginTop: 12 }}>
+          {testMsg.ok ? '连接成功' : `连接失败：${testMsg.text}`}
+        </div>
+      )}
+      {error && <div className="banner banner-danger" style={{ marginTop: 12 }}>{error}</div>}
+      {changed && <div className="banner banner-warning" style={{ marginTop: 12 }}>有未保存改动</div>}
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+        <button className="btn-primary" disabled={!changed || saveMut.isPending} onClick={save}>{saveMut.isPending ? '保存中…' : '保存'}</button>
+        <button disabled={testMut.isPending} onClick={() => testMut.mutate()}>{testMut.isPending ? '测试中…' : '测试连接'}</button>
+        {changed && <button onClick={() => { setForm({}); setTestMsg(null); }}>取消</button>}
       </div>
     </section>
   );
