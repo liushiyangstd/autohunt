@@ -1,0 +1,18 @@
+# autohunt backend runtime requirements (Python >= 3.12)
+# Install from the repo root:
+#   pip install -r requirements.txt
+
+# --- Runtime ---
+fastapi>=0.141
+uvicorn>=0.30
+sqlmodel>=0.0.22
+cryptography>=42
+python-multipart>=0.0.9
+pypdf>=4
+
+# Local domain package (editable install)
+-e ./packages/domain
+
+# --- Dev / test (not needed to run the server; needed for pytest) ---
+pytest>=7.4
+httpx>=0.28
