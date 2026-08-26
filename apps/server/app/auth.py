@@ -26,6 +26,9 @@ from app.security import sha256
 
 UI_COOKIE = "ah_session"
 
+# AuthMiddleware 白名单：无需凭证即可访问的 /api/v1 路径（UI session 引导）。
+AUTH_BYPASS_PATHS: frozenset[str] = frozenset({"/api/v1/ui/session"})
+
 
 def load_ui_token(data_dir: Path, configured: str | None) -> str:
     if configured:
@@ -58,7 +61,11 @@ class AuthMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or not scope["path"].startswith("/api/v1"):
+        if (
+            scope["type"] != "http"
+            or scope["path"] in AUTH_BYPASS_PATHS
+            or not scope["path"].startswith("/api/v1")
+        ):
             await self.app(scope, receive, send)
             return
 

@@ -3825,6 +3825,28 @@
           }
         ]
       }
+    },
+    "/api/v1/ui/session": {
+      "get": {
+        "tags": [
+          "ui"
+        ],
+        "summary": "UI session 引导（签发 ah_session cookie）",
+        "description": "浏览器首访无任何凭证时调用本端点，服务端读取/生成 UI session token 并以 Set-Cookie: ah_session 下发（HttpOnly; SameSite=Lax）。后续 /api/v1 请求携带该 cookie 即可通过鉴权中间件。",
+        "operationId": "ui_session_api_v1_ui_session_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UiSessionOk"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -6412,6 +6434,18 @@
           "status"
         ],
         "title": "SubmitResultAck"
+      },
+      "UiSessionOk": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "UiSessionOk",
+        "description": "GET /ui/session 成功响应；Set-Cookie 侧载 ah_session。"
       },
       "ValidationError": {
         "properties": {
