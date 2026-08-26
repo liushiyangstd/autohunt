@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import imaplib
+import os
 
 
 class AuthFailed(Exception):
@@ -14,7 +15,16 @@ class AuthFailed(Exception):
 
 
 def connect(host: str, port: int, email: str, auth_code: str, timeout: int = 30):
-    """建立 IMAP4_SSL 连接并登录；认证失败抛 AuthFailed，网络错误原样上抛。"""
+    """建立 IMAP4_SSL 连接并登录；认证失败抛 AuthFailed，网络错误原样上抛。
+
+    `AUTOHUNT_IMAP_BACKEND=fake` 时返回 test double（Tester §17 钩子 ①），
+    由 `POST /__test__/imap/configure` 脚本化行为，测试免真实网络。
+    """
+
+    if os.environ.get("AUTOHUNT_IMAP_BACKEND") == "fake":
+        from app.services.imap_fake import fake_connect
+
+        return fake_connect(host, port, email, auth_code, timeout=timeout)
 
     client = imaplib.IMAP4_SSL(host, port, timeout=timeout)
     try:

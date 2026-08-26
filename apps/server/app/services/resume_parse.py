@@ -17,6 +17,7 @@ REQUIRED_FIELDS = ("name", "phone", "email")
 _PHONE_RE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _NAME_RE = re.compile(r"^(?:姓名[:：]\s*)?([一-龥]{2,4})(?:\s*(?:男|女))?$")
+_LATIN_NAME_RE = re.compile(r"^(?:Name[:：]\s*)?([A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*){0,3})$")
 _CITY_RE = re.compile(r"(?:期望工作地[点市]?|意向城市|期望城市)[:：]?\s*([一-龥A-Za-z（()、,，/\s]{2,30})")
 _POSITION_RE = re.compile(r"(?:求职意向|期望职位|意向岗位)[:：]?\s*([一-龥A-Za-z0-9（()、,，/\s]{2,30})")
 _EDU_RE = re.compile(
@@ -69,8 +70,11 @@ def parse_fields(text: str) -> dict:
         email = m.group(0)
 
     name = None
-    for ln in lines[:10]:  # 姓名一般在开头若干行
+    for ln in lines[:10]:  # 姓名一般在开头若干行（中文名优先，其次英文名）
         if m := _NAME_RE.match(ln):
+            name = m.group(1)
+            break
+        if m := _LATIN_NAME_RE.match(ln):
             name = m.group(1)
             break
 

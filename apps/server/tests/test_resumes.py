@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import UI_TOKEN, make_application
+from tests.conftest import UI_TOKEN, make_application
 
 
 def _make_pdf(lines: list[str]) -> bytes:
@@ -16,7 +16,8 @@ def _make_pdf(lines: list[str]) -> bytes:
     def esc(s: str) -> str:
         return s.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
 
-    text_ops = "BT /F1 12 Tf 72 720 Td " + " ".join(f"({esc(ln)}) Tj T*" for ln in lines) + " ET"
+    # 显式设置行距（TL），否则 T* 换行不产生 y 位移，pypdf 会拼接成一行
+    text_ops = "BT /F1 12 Tf 72 720 Td 14 TL " + " ".join(f"({esc(ln)}) Tj T*" for ln in lines) + " ET"
     stream = text_ops.encode("ascii")
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",

@@ -5,6 +5,7 @@ PDF 原件落盘 data/resumes/；上传即同步解析（services.resume_parse�
 """
 
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import Response
@@ -117,6 +118,7 @@ async def create_resume(
         row.missing_fields = missing
         row.parse_error = parse_error
         session.add(row)
+        session.flush()  # FK 到 resume.id（非 PK 唯一列），SQLAlchemy 不自动排序，先落 resume 再建 profile
 
         profile = ProfileRow(
             resume_id=row.id,
@@ -243,9 +245,15 @@ def get_resume_file(request: Request, resume_id: str):
         file_path = Path(settings.data_dir) / row.file_path
     if not file_path.exists():
         raise not_found("简历 PDF 文件缺失")
+    ascii_name = (row.name or "resume").encode("ascii", errors="ignore").decode() or "resume"
     return PDFResponse(
         content=file_path.read_bytes(),
-        headers={"Content-Disposition": f'attachment; filename="{row.name}.pdf"'},
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_name}.pdf"; '
+                f"filename*=UTF-8''{quote(row.name or 'resume')}.pdf"
+            )
+        },
     )
 
 

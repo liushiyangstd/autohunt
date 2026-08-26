@@ -19,7 +19,19 @@ def new_id() -> str:
     return uuid.uuid4().hex
 
 
+_now_override: datetime | None = None
+
+
+def set_clock_override(dt: datetime | None) -> None:
+    """测试钩子（§17 ③）：覆盖全局「现在」，传 None 恢复真实时钟。仅测试环境调用。"""
+
+    global _now_override
+    _now_override = dt
+
+
 def utcnow() -> datetime:
+    if _now_override is not None:
+        return _now_override
     return datetime.now(timezone.utc)
 
 
@@ -143,6 +155,7 @@ class EmailAccount(SQLModel, table=True):
     status: str = "active"  # active / auth_failed
     last_uid: int = 0
     last_sync_at: datetime | None = None
+    created_at: datetime = Field(default_factory=utcnow)
 
 
 class EmailEvent(SQLModel, table=True):
