@@ -14,7 +14,7 @@ import { fmtDate } from '../utils/time';
 export default function Stats() {
   const apps = useQuery({ queryKey: ['applications'], queryFn: () => api.listApplications(), retry: false });
   const jobs = useQuery({ queryKey: ['jobs'], queryFn: () => api.listJobs(), retry: false });
-  const cfms = useQuery({ queryKey: ['confirmations', 'pending'], queryFn: () => api.listPendingConfirmations(), retry: false });
+  const cfms = useQuery({ queryKey: ['confirmations', 'pending'], queryFn: () => api.listConfirmations({ status: '待确认' }), retry: false });
   const events = useQuery({ queryKey: ['events', 'pending'], queryFn: () => api.listPendingEvents(), retry: false });
 
   const [channel, setChannel] = useState<string[]>([]);
@@ -34,7 +34,7 @@ export default function Stats() {
   if (apps.isError) return <EmptyState icon="⚠️" text="统计数据加载失败（或 ?mock=1 查看演示）。" />;
 
   const f = funnel(filtered);
-  const m = metrics(apps.data?.items ?? [], (cfms.data?.length ?? 0) + (events.data?.items.length ?? 0));
+  const m = metrics(apps.data?.items ?? [], (cfms.data?.items?.length ?? 0) + (events.data?.items.length ?? 0));
   const maxCount = Math.max(1, ...f.stages.map((s) => s.count));
 
   const exportCsv = () => {
