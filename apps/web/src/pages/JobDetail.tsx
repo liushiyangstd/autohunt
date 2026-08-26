@@ -1,14 +1,16 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, ApiError, type ApplicationStatus } from '../api';
+import { api, ApiError, type ApplicationStatus, type HistorySource } from '../api';
 import Modal from '../components/Modal';
-import { StatusBadge } from '../components/Badges';
+import { ConfirmBadge, StatusBadge } from '../components/Badges';
 import { EmptyState, Skeleton } from '../components/Feedback';
 import { manualTargets } from '../utils/status';
 import { fmtDateTime } from '../utils/time';
 
-/** D-05 岗位详情（FR-3/30/31，BR-10/11） */
+const SOURCE_LABEL: Record<HistorySource, string> = { ui: '手动', email: '邮箱识别', agent: 'Agent 回写' };
+
+/** D-05 岗位详情（FR-3/30/31，BR-10/11）；历史/确认记录/邮件回溯接契约 v2 读侧端点 */
 export default function JobDetail() {
   const { id = '' } = useParams();
   const qc = useQueryClient();
@@ -20,9 +22,31 @@ export default function JobDetail() {
   const [statusMenu, setStatusMenu] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const app = apps.data?.items.find((a) => a.job_id === id);
+
+  // 读侧三端点（FR-31/24/43，契约 v2）：仅在有投递记录时查询
+  const history = useQuery({
+    queryKey: ['applications', app?.id, 'history'],
+    queryFn: () => api.getApplicationHistory(app!.id),
+    enabled: !!app, retry: false,
+  });
+  const confirmations = useQuery({
+    queryKey: ['applications', app?.id, 'confirmations'],
+    queryFn: () => api.getApplicationConfirmations(app!.id),
+    enabled: !!app, retry: false,
+  });
+  const emails = useQuery({
+    queryKey: ['applications', app?.id, 'emails'],
+    queryFn: () => api.getApplicationEmails(app!.id),
+    enabled: !!app, retry: false,
+  });
+
   const moveMut = useMutation({
     mutationFn: ({ appId, status }: { appId: string; status: ApplicationStatus }) => api.updateApplication(appId, { status }),
-    onSuccess: () => { setStatusMenu(false); setError(null); qc.invalidateQueries({ queryKey: ['applications'] }); },
+    onSuccess: () => {
+      setStatusMenu(false); setError(null);
+      qc.invalidateQueries({ queryKey: ['applications'] });
+    },
     onError: (e) => {
       setStatusMenu(false);
       // AC-6 用户可见面：状态机 409 时给出提示
@@ -35,7 +59,6 @@ export default function JobDetail() {
   if (job.isLoading) return <Skeleton lines={5} />;
   if (job.isError || !job.data) return <EmptyState icon="⚠️" text="岗位不存在或加载失败" action={<Link to="/board">返回看板</Link>} />;
   const j = job.data;
-  const app = apps.data?.items.find((a) => a.job_id === j.id);
   const events = (schedule.data?.items ?? []).filter((e) => e.application_id === app?.id);
 
   return (
@@ -65,19 +88,30 @@ export default function JobDetail() {
           </div>
 
           {tab === 'history' && (
-            <div>
-              <div className="banner banner-info" style={{ marginBottom: 12 }}>
-                契约缺口：状态历史（FR-31，含来源标记 BR-11）端点未在冻结契约中，待扩展后此处展示时间线。
-              </div>
-              {app && (
+            !app ? <EmptyState text="该岗位暂无投递记录" />
+              : history.isLoading ? <Skeleton lines={3} />
+              : history.isError ? <EmptyState icon="⚠️" text="状态历史加载失败" />
+              : (
                 <div className="timeline">
-                  <div className="timeline-item">
-                    <div><StatusBadge status={app.status} /></div>
-                    <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>当前状态 · {app.applied_at ? `投递于 ${fmtDateTime(app.applied_at)}` : '尚未投递'}</div>
-                  </div>
+                  {(history.data?.items ?? []).map((h, i) => (
+                    <div key={i} className="timeline-item">
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        {h.from_status && <><StatusBadge status={h.from_status} /><span>→</span></>}
+                        <StatusBadge status={h.to_status} />
+                        <span className="badge" style={{ background: 'var(--st-pending-bg)', color: 'var(--color-text-secondary)' }}>
+                          来源：{SOURCE_LABEL[h.source]}
+                        </span>
+                        {h.rejected && (
+                          <span className="badge" title="该自动写入被状态机拒绝，未生效（AC-6 排查）"
+                            style={{ background: 'var(--st-rejected-bg)', color: 'var(--st-rejected)' }}>已被状态机拒绝</span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{fmtDateTime(h.created_at)}</div>
+                    </div>
+                  ))}
+                  {(history.data?.items.length ?? 0) === 0 && <EmptyState text="暂无状态历史" />}
                 </div>
-              )}
-            </div>
+              )
           )}
           {tab === 'schedule' && (
             events.length === 0 ? <EmptyState text="暂无关联日程" /> : events.map((e) => (
@@ -89,10 +123,42 @@ export default function JobDetail() {
             ))
           )}
           {tab === 'mail' && (
-            <div className="banner banner-info">契约缺口：原始邮件回溯（FR-43）端点未在冻结契约中（email_event 仅返回元数据，无原文读取端点），待扩展。</div>
+            !app ? <EmptyState text="该岗位暂无投递记录" />
+              : emails.isLoading ? <Skeleton lines={3} />
+              : emails.isError ? <EmptyState icon="⚠️" text="邮件回溯加载失败" />
+              : (emails.data?.items.length ?? 0) === 0 ? <EmptyState icon="✉️" text="暂无匹配到该岗位的邮件事件" />
+              : (emails.data?.items ?? []).map((e) => (
+                <div key={e.id} className="card" style={{ padding: 12, marginBottom: 8 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span className="badge" style={{ background: 'var(--st-submitted-bg)', color: 'var(--color-info)' }}>{e.type}</span>
+                    <strong>{e.email_subject ?? '（无主题）'}</strong>
+                    <span className="badge" style={{ background: 'var(--st-pending-bg)', color: 'var(--color-text-secondary)' }}>{e.status}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
+                    发件人：{e.email_sender ?? '—'} · 收件于 {fmtDateTime(e.email_received_at)}
+                    {e.event_time && <> · 事件时间 {fmtDateTime(e.event_time)}</>}
+                  </div>
+                </div>
+              ))
           )}
           {tab === 'confirm' && (
-            <div className="banner banner-info">契约缺口：按投递查询确认流历史（FR-23/24 留档）的端点未在冻结契约中，待扩展。单条确认任务可从工作台进入查看。</div>
+            !app ? <EmptyState text="该岗位暂无投递记录" />
+              : confirmations.isLoading ? <Skeleton lines={3} />
+              : confirmations.isError ? <EmptyState icon="⚠️" text="确认记录加载失败" />
+              : (confirmations.data?.items.length ?? 0) === 0 ? <EmptyState text="暂无确认记录" />
+              : (confirmations.data?.items ?? []).map((c) => (
+                <div key={c.id} className="card" style={{ padding: 12, marginBottom: 8, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <ConfirmBadge status={c.status} />
+                  <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                    创建于 {fmtDateTime(c.created_at)}{c.confirmed_at ? ` · 确认于 ${fmtDateTime(c.confirmed_at)}` : ''}
+                  </span>
+                  {c.submit_result === 'success' && <span className="badge" style={{ background: 'var(--st-offer-bg)', color: 'var(--color-success)' }}>提交成功</span>}
+                  {c.submit_result === 'failed' && (
+                    <span className="badge" title={c.fail_reason ?? ''} style={{ background: 'var(--st-rejected-bg)', color: 'var(--st-rejected)' }}>提交失败</span>
+                  )}
+                  <Link to={`/confirmations/${c.id}`} style={{ marginLeft: 'auto', fontSize: 13 }}>查看留档 →</Link>
+                </div>
+              ))
           )}
         </div>
 

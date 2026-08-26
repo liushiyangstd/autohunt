@@ -21,6 +21,10 @@ vi.mock('../api', async (importOriginal) => {
     mockMode: true,
     api: {
       getConfirmationDetail: vi.fn(() => Promise.resolve(h.state.detail)),
+      listConfirmations: vi.fn(() => Promise.resolve({
+        items: [{ id: 'cfm-1', application_id: 'app-1', status: h.state.detail?.status ?? '待确认', created_at: '2026-08-25T01:00:00Z' }],
+        next_cursor: null,
+      })),
       getProfile: vi.fn(() => Promise.resolve({
         name: '张三', phone: '13800001234', email: 'qiuzhi@example.com',
         educations: [{ school: '某大学' }], experiences: [], skills: [], awards: [],
@@ -71,7 +75,7 @@ function renderPage() {
 const pendingDetail: ConfirmationDetail = {
   id: 'cfm-1', application_id: 'app-1', status: '待确认',
   fields: { 姓名: '张三', 电话: '13800001234', 邮箱: 'qiuzhi@example.com' },
-  created_at: '2026-08-25T01:00:00Z', snapshotUnavailable: false,
+  created_at: '2026-08-25T01:00:00Z',
 };
 
 beforeEach(() => {
@@ -158,7 +162,7 @@ describe('D-06 人工确认界面（BR-1）', () => {
     h.state.detail = {
       ...pendingDetail, status: '已确认',
       confirmed_fields: { 姓名: '张三' }, submit_token: null,
-      submit_result: { result: 'failed', fail_reason: '验证码拦截', submitted_at: '2026-08-25T12:00:00Z' },
+      submit_result: 'failed', fail_reason: '验证码拦截', submitted_at: '2026-08-25T12:00:00Z',
     };
     renderPage();
     expect(await screen.findByText(/Agent 提交失败：验证码拦截/)).toBeInTheDocument();

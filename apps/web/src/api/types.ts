@@ -1,5 +1,5 @@
 /**
- * 契约类型 — 逐字对应 docs/design/api-openapi.json (8dfc641)。
+ * 契约类型 — 逐字对应 docs/design/api-openapi.json（契约 v2，info.version 0.2.1 @ adcae45）。
  * 修改契约需走 PR 评审，此处只读对齐。
  */
 
@@ -118,12 +118,25 @@ export interface ConfirmationCreated { confirmation_id: string; status: string }
 
 export interface ConfirmationPending { status: '待确认' }
 
+/** 待确认（UI session 视图，契约 v2）：字段-值快照供 D-06 对照表渲染；Agent Bearer 仅 ConfirmationPending */
+export interface ConfirmationPendingUI {
+  status: '待确认';
+  application_id: string;
+  fields: Record<string, string>;
+  context?: Record<string, string> | null;
+  created_at: string;
+}
+
 export interface ConfirmationConfirmed {
   status: '已确认';
   confirmed_fields: Record<string, string>;
   /** token 过期/已消耗时为空 —— 走 UI「重新放行」恢复 */
   submit_token: string | null;
   expires_at: string;
+  /** 提交结果回写（FR-24，契约 v2）；未回写为 null */
+  submit_result?: 'success' | 'failed' | null;
+  fail_reason?: string | null;
+  submitted_at?: string | null;
 }
 
 export interface ConfirmationClosed {
@@ -131,7 +144,21 @@ export interface ConfirmationClosed {
   reason?: string | null;
 }
 
-export type ConfirmationView = ConfirmationPending | ConfirmationConfirmed | ConfirmationClosed;
+export type ConfirmationView = ConfirmationPending | ConfirmationPendingUI | ConfirmationConfirmed | ConfirmationClosed;
+
+/** 手动关闭请求体（契约 v2，可选）：待确认 → 已超时关闭 */
+export interface ConfirmationClose { reason?: string | null }
+
+/** 确认单摘要（契约 v2 列表端点，D-01 待确认分组/红点数据源） */
+export interface ConfirmationListItem {
+  id: string;
+  application_id: string;
+  status: ConfirmationStatus;
+  created_at: string;
+  confirmed_at?: string | null;
+  submit_result?: 'success' | 'failed' | null;
+}
+export interface ConfirmationList { items: ConfirmationListItem[]; next_cursor?: string | null }
 
 export interface ConfirmationConfirm { confirmed_fields: Record<string, string> }
 export interface ConfirmationReject { reason?: string | null }
@@ -175,11 +202,155 @@ export interface ApiKeyCreate { name: string }
 export interface ApiKeyCreated { id: string; name: string; key: string; prefix: string; created_at: string }
 export interface ApiKeyInfo { id: string; name: string; prefix: string; created_at: string; last_used_at?: string | null }
 
-/** 前端内部使用：待确认投递列表项（契约暂无 list 端点，见 api/mock.ts 标注） */
-export interface PendingConfirmation {
-  confirmation_id: string;
-  application_id: string;
-  company: string;
-  title: string;
+// ---- 契约 v2：D-05 读侧 ----
+
+export type HistorySource = 'ui' | 'email' | 'agent';
+
+/** 状态历史（FR-31，D-05 状态历史 Tab） */
+export interface StatusHistoryEntry {
+  from_status?: ApplicationStatus | null;
+  to_status: ApplicationStatus;
+  source: HistorySource;
+  /** 被状态机拒绝的自动写入标记（§5，AC-6 排查） */
+  rejected: boolean;
   created_at: string;
+}
+export interface StatusHistoryList { items: StatusHistoryEntry[] }
+
+/** 投递关联的确认单记录（FR-24，D-05 确认记录 Tab） */
+export interface ConfirmationRecord {
+  id: string;
+  status: ConfirmationStatus;
+  created_at: string;
+  confirmed_at?: string | null;
+  submit_result?: 'success' | 'failed' | null;
+  fail_reason?: string | null;
+  submitted_at?: string | null;
+}
+export interface ConfirmationRecordList { items: ConfirmationRecord[] }
+
+/** 事件详情 = 列表字段 + 证据区元数据（D-07，RISK-5） */
+export interface EmailEventDetail extends EmailEvent {
+  email_subject?: string | null;
+  email_sender?: string | null;
+  email_received_at?: string | null;
+}
+export interface EmailEventDetailList { items: EmailEventDetail[] }
+
+// ---- 契约 v2：事件写侧（D-07） ----
+
+/** 确认加入日程；任一字段均可修正（修正后加入 = 确认值取修改后值） */
+export interface EmailEventConfirm {
+  type?: EmailEventType | null;
+  event_time?: string | null;
+  location?: string | null;
+  meeting_link?: string | null;
+  company?: string | null;
+  matched_job_id?: string | null;
+}
+export interface EmailEventConfirmResult { event: EmailEvent; schedule_event: ScheduleEvent }
+export interface EmailEventDiscard { reason?: string | null }
+
+// ---- 契约 v2：简历（D-02，FR-1/2/3） ----
+
+export type ResumeParseStatus = '解析中' | '解析完成' | '部分字段缺失' | '解析失败';
+
+export interface ResumeInfo {
+  id: string;
+  name: string;
+  version: number;
+  is_default: boolean;
+  parse_status: ResumeParseStatus;
+  missing_fields: string[];
+  parse_error?: string | null;
+  /** 引用本版本的投递数（FR-3 回溯；>0 时禁止删除） */
+  used_count: number;
+  created_at: string;
+}
+export interface ResumeList { items: ResumeInfo[] }
+export interface ResumeUpdate { name?: string | null; is_default?: boolean | null }
+
+/** 档案写（FR-2/3，D-03 显式保存）：全量替换指定简历版本 */
+export interface ProfileUpdate {
+  resume_id: string;
+  name?: string | null;
+  phone?: string | null;
+  /** 传 null/省略时按 §3.2 默认回填已绑定求职邮箱 */
+  email?: string | null;
+  educations: Education[];
+  experiences: Experience[];
+  skills: string[];
+  awards: string[];
+  expected_city?: string | null;
+  expected_position?: string | null;
+}
+
+// ---- 契约 v2：邮箱账户（D-10，FR-40/44） ----
+
+export type EmailAccountStatus = 'active' | 'auth_failed';
+
+export interface EmailAccountBind {
+  email: string;
+  imap_host: string;
+  port?: number;
+  /** IMAP 授权码（OP-4）；服务端加密落盘，任何响应不回传 */
+  auth_code: string;
+}
+export interface EmailAccountInfo {
+  id: string;
+  email: string;
+  imap_host: string;
+  port: number;
+  status: EmailAccountStatus;
+  last_sync_at?: string | null;
+  created_at: string;
+}
+export interface EmailAccountList { items: EmailAccountInfo[] }
+export interface EmailAccountTestResult { ok: boolean; error?: string | null }
+export interface EmailAccountReauth { auth_code: string }
+
+// ---- 契约 v2：通知（FR-32） ----
+
+export type NotificationKind = '24h' | '1h' | 'deadline';
+export interface Notification {
+  id: string;
+  kind: NotificationKind;
+  title: string;
+  message?: string | null;
+  fire_at: string;
+  schedule_event_id?: string | null;
+  application_id?: string | null;
+}
+export interface NotificationList { items: Notification[]; next_cursor?: string | null }
+
+// ---- 契约 v2：统计（FR-50/51/52，口径 §10.4） ----
+
+export interface StatsOverview {
+  total_applications: number;
+  in_progress: number;
+  /** 待确认事项数 = 待确认投递数 + 待确认事件数（D-01 导航红点同口径） */
+  pending_items: number;
+  offers: number;
+}
+
+export interface StatsFunnelStage {
+  stage: ApplicationStatus;
+  /** 进入过该状态的投递数：status_history 出现该状态或主链更后状态（去重） */
+  entered_count: number;
+}
+export interface StatsFunnelConversions {
+  written_test_rate: number | null;
+  interview_rate: number | null;
+  offer_rate: number | null;
+}
+export interface StatsFunnel { stages: StatsFunnelStage[]; conversions: StatsFunnelConversions }
+
+export interface StatsFilter { channel?: string; from?: string; to?: string }
+
+// ---- 契约 v2：提醒偏好（FR-32，D-10） ----
+
+export interface ReminderSettings {
+  schedule_24h: boolean;
+  schedule_1h: boolean;
+  include_deadline: boolean;
 }

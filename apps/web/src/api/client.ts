@@ -1,31 +1,38 @@
 import type {
   ApiKeyCreate, ApiKeyCreated, ApiKeyInfo,
   Application, ApplicationCreate, ApplicationList, ApplicationUpdate,
-  ConfirmationConfirm, ConfirmationConfirmed, ConfirmationCreate, ConfirmationCreated,
-  ConfirmationReject, ConfirmationStatus, ConfirmationView,
-  CreateJobResult, EmailEventList, Job, JobCreate, JobList, JobUpdate,
-  PendingConfirmation, ProfileResponse, ScheduleEventList,
+  ConfirmationClose, ConfirmationConfirm, ConfirmationConfirmed, ConfirmationCreate, ConfirmationCreated,
+  ConfirmationList, ConfirmationRecordList, ConfirmationReject, ConfirmationStatus, ConfirmationView,
+  CreateJobResult, EmailAccountBind, EmailAccountInfo, EmailAccountList, EmailAccountReauth,
+  EmailAccountTestResult, EmailEventConfirm, EmailEventConfirmResult, EmailEventDetail,
+  EmailEventDetailList, EmailEventDiscard, EmailEventList,
+  Job, JobCreate, JobList, JobUpdate,
+  NotificationList, Profile, ProfileResponse, ProfileUpdate, ReminderSettings,
+  ResumeInfo, ResumeList, ResumeUpdate,
+  ScheduleEventList, StatsFilter, StatsFunnel, StatsOverview, StatusHistoryList,
 } from './types';
 
 /**
- * [契约缺口] 确认单完整视图（D-06 对照表数据源）。
- * 冻结契约中 GET /confirmations/{id} 的「待确认」变体仅返回 {status}，
- * 不含字段快照 fields / 提交结果回写 —— D-06 对照表与 FR-24 结果视图
- * 依赖的字段在契约内不可得，已上报 Leader/BackendDev 待契约扩展。
- * 真实模式 snapshotUnavailable=true；mock 模式提供完整演示数据。
+ * 确认单完整视图（D-06 对照表 / FR-24 结果视图数据源）。
+ * 契约 v2：GET /confirmations/{id} 按 caller 区分 —— UI session 待确认变体
+ * 携带 fields/context 快照（ConfirmationPendingUI）；已确认变体携带
+ * submit_result / fail_reason / submitted_at 回写。本类型为各变体的合并视图；
+ * application_id 仅待确认变体保证存在，其余变体由调用方从确认单列表补齐。
  */
 export interface ConfirmationDetail {
   id: string;
-  application_id: string;
   status: ConfirmationStatus;
-  fields: Record<string, string>;
+  application_id?: string;
+  fields?: Record<string, string>;
+  context?: Record<string, string> | null;
+  created_at?: string;
   confirmed_fields?: Record<string, string>;
   submit_token?: string | null;
   expires_at?: string;
+  submit_result?: 'success' | 'failed' | null;
+  fail_reason?: string | null;
+  submitted_at?: string | null;
   reason?: string | null;
-  submit_result?: { result: 'success' | 'failed'; fail_reason?: string | null; submitted_at: string } | null;
-  created_at?: string;
-  snapshotUnavailable?: boolean;
 }
 
 /** 统一错误信封解析（契约 §3 通用约定） */
@@ -41,20 +48,25 @@ export class ApiError extends Error {
   }
 }
 
-/**
- * 数据接口 —— 前端唯一依赖面。
- * contract* 方法 = 冻结契约 19 端点（真实后端必须支持）；
- * 标注 [契约缺口] 的方法 = UI 设计需要但冻结契约未覆盖，真实模式抛 ApiError(501)，
- * mock 模式提供演示数据（见 mock.ts 顶部说明）。
- */
+/** 数据接口 —— 前端唯一依赖面，逐端点对应契约 v2（api-openapi.json @ 0.2.1） */
 export interface AutohuntApi {
   // keys（FR-25，UI session）
   listKeys(): Promise<ApiKeyInfo[]>;
   createKey(body: ApiKeyCreate): Promise<ApiKeyCreated>;
   revokeKey(id: string): Promise<void>;
 
-  // profile（FR-20）
+  // profile（FR-20 读 / FR-2 写，D-03 显式保存）
   getProfile(resumeId?: string): Promise<ProfileResponse>;
+  putProfile(body: ProfileUpdate): Promise<Profile>;
+
+  // resumes（FR-1/2/3，D-02）
+  listResumes(): Promise<ResumeList>;
+  uploadResume(file: File, name?: string): Promise<ResumeInfo>;
+  updateResume(id: string, body: ResumeUpdate): Promise<ResumeInfo>;
+  deleteResume(id: string): Promise<void>;
+  /** PDF 原件下载地址（cookie 会话，直接作 <a href>） */
+  resumeFileUrl(id: string): string;
+  listResumeReferences(id: string): Promise<ApplicationList>;
 
   // jobs（FR-10/21，BR-3）
   createJob(body: JobCreate): Promise<CreateJobResult>;
@@ -62,28 +74,51 @@ export interface AutohuntApi {
   getJob(id: string): Promise<Job>;
   updateJob(id: string, body: JobUpdate): Promise<Job>;
 
-  // applications（FR-11/21/30）
+  // applications（FR-11/21/30；from/to 为契约 v2 服务端筛选）
   createApplication(body: ApplicationCreate): Promise<Application>;
-  listApplications(filter?: { status?: string; company?: string; channel?: string }): Promise<ApplicationList>;
+  listApplications(filter?: { status?: string; company?: string; channel?: string; from?: string; to?: string }): Promise<ApplicationList>;
   updateApplication(id: string, body: ApplicationUpdate): Promise<Application>;
+  getApplicationHistory(id: string): Promise<StatusHistoryList>;
+  getApplicationConfirmations(id: string): Promise<ConfirmationRecordList>;
+  getApplicationEmails(id: string): Promise<EmailEventDetailList>;
 
-  // confirmations（FR-22/23/24，BR-1）
+  // confirmations（FR-22/23/24，BR-1；列表/PendingUI 快照/close 为契约 v2）
   createConfirmation(body: ConfirmationCreate): Promise<ConfirmationCreated>;
+  listConfirmations(filter?: { status?: ConfirmationStatus; cursor?: string; limit?: number }): Promise<ConfirmationList>;
   getConfirmation(id: string): Promise<ConfirmationView>;
+  getConfirmationDetail(id: string): Promise<ConfirmationDetail>;
   confirm(id: string, body: ConfirmationConfirm): Promise<ConfirmationConfirmed>;
   reject(id: string, body: ConfirmationReject): Promise<ConfirmationView>;
   reissue(id: string): Promise<ConfirmationConfirmed>;
+  closeConfirmation(id: string, body?: ConfirmationClose): Promise<ConfirmationView>;
 
-  // events / schedule（FR-42/43）
+  // events / schedule（FR-42/43，BR-2；写侧为契约 v2，仅 UI）
   listPendingEvents(): Promise<EmailEventList>;
+  getEvent(id: string): Promise<EmailEventDetail>;
+  getEventRaw(id: string): Promise<string>;
+  confirmEvent(id: string, body: EmailEventConfirm): Promise<EmailEventConfirmResult>;
+  discardEvent(id: string, body: EmailEventDiscard): Promise<EmailEventDetail>;
   getSchedule(from?: string, to?: string): Promise<ScheduleEventList>;
 
-  /** [契约缺口] 待确认投递列表 —— 契约无 GET /confirmations 列表端点 */
-  listPendingConfirmations(): Promise<PendingConfirmation[]>;
-  /** [契约缺口] 确认单完整视图（含待确认态字段快照，D-06 数据源） */
-  getConfirmationDetail(id: string): Promise<ConfirmationDetail>;
-  /** [契约缺口] 手动关闭确认任务（§12 已超时关闭）—— 契约无 close 端点 */
-  closeConfirmation(id: string): Promise<void>;
+  // email-accounts（FR-40/44，D-10）
+  testEmailAccount(body: EmailAccountBind): Promise<EmailAccountTestResult>;
+  listEmailAccounts(): Promise<EmailAccountList>;
+  bindEmailAccount(body: EmailAccountBind): Promise<EmailAccountInfo>;
+  reauthEmailAccount(id: string, body: EmailAccountReauth): Promise<EmailAccountInfo>;
+  unbindEmailAccount(id: string): Promise<void>;
+
+  // notifications（FR-32）
+  listNotifications(cursor?: string, limit?: number): Promise<NotificationList>;
+
+  // stats（FR-50/51/52，口径 §10.4，服务端 status_history 计算）
+  getStatsOverview(filter?: StatsFilter): Promise<StatsOverview>;
+  getStatsFunnel(filter?: StatsFilter): Promise<StatsFunnel>;
+  /** 台账导出 CSV（触发浏览器下载） */
+  downloadStatsExport(filter?: StatsFilter): void;
+
+  // settings（FR-32 配套，D-10）
+  getReminders(): Promise<ReminderSettings>;
+  putReminders(body: ReminderSettings): Promise<ReminderSettings>;
 }
 
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api/v1';
@@ -111,13 +146,34 @@ function qs(params: Record<string, string | number | undefined>): string {
   return s ? `?${s}` : '';
 }
 
-/** 真实后端客户端 —— 只调用冻结契约内的端点 */
+/** 真实后端客户端 —— 只调用契约 v2 内的端点 */
 export const httpApi: AutohuntApi = {
   listKeys: async () => (await req<{ items: ApiKeyInfo[] }>('/keys')).items,
   createKey: (body) => req<ApiKeyCreated>('/keys', { method: 'POST', body: JSON.stringify(body) }),
   revokeKey: (id) => req<void>(`/keys/${id}`, { method: 'DELETE' }),
 
   getProfile: (resumeId) => req<ProfileResponse>(`/profile${qs({ resume_id: resumeId })}`),
+  putProfile: (body) => req<Profile>('/profile', { method: 'PUT', body: JSON.stringify(body) }),
+
+  listResumes: () => req<ResumeList>('/resumes'),
+  async uploadResume(file, name) {
+    const fd = new FormData();
+    fd.append('file', file);
+    if (name) fd.append('name', name);
+    // multipart：不手动设置 Content-Type，由浏览器带 boundary
+    const res = await fetch(`${BASE}/resumes`, { method: 'POST', credentials: 'include', body: fd });
+    const text = await res.text();
+    const data = text ? JSON.parse(text) : undefined;
+    if (!res.ok) {
+      const env = data?.error;
+      throw new ApiError(res.status, env?.code ?? 'UNKNOWN', env?.message ?? res.statusText, env?.details);
+    }
+    return data as ResumeInfo;
+  },
+  updateResume: (id, body) => req<ResumeInfo>(`/resumes/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteResume: (id) => req<void>(`/resumes/${id}`, { method: 'DELETE' }),
+  resumeFileUrl: (id) => `${BASE}/resumes/${id}/file`,
+  listResumeReferences: (id) => req<ApplicationList>(`/resumes/${id}/references`),
 
   async createJob(body) {
     const res = await fetch(`${BASE}/jobs`, {
@@ -135,35 +191,55 @@ export const httpApi: AutohuntApi = {
   updateJob: (id, body) => req<Job>(`/jobs/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
 
   createApplication: (body) => req<Application>('/applications', { method: 'POST', body: JSON.stringify(body) }),
-  listApplications: (f) => req<ApplicationList>(`/applications${qs({ status: f?.status, company: f?.company, channel: f?.channel })}`),
+  listApplications: (f) => req<ApplicationList>(`/applications${qs({ status: f?.status, company: f?.company, channel: f?.channel, from: f?.from, to: f?.to })}`),
   updateApplication: (id, body) => req<Application>(`/applications/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  getApplicationHistory: (id) => req<StatusHistoryList>(`/applications/${id}/history`),
+  getApplicationConfirmations: (id) => req<ConfirmationRecordList>(`/applications/${id}/confirmations`),
+  getApplicationEmails: (id) => req<EmailEventDetailList>(`/applications/${id}/emails`),
 
   createConfirmation: (body) => req<ConfirmationCreated>('/confirmations', { method: 'POST', body: JSON.stringify(body) }),
+  listConfirmations: (f) => req<ConfirmationList>(`/confirmations${qs({ status: f?.status, cursor: f?.cursor, limit: f?.limit })}`),
   getConfirmation: (id) => req<ConfirmationView>(`/confirmations/${id}`),
+  // UI session 下待确认变体即 PendingUI（含 fields/context 快照），直接展开合并
+  getConfirmationDetail: async (id) => ({ id, ...(await req<Omit<ConfirmationDetail, 'id'>>(`/confirmations/${id}`)) }),
   confirm: (id, body) => req<ConfirmationConfirmed>(`/confirmations/${id}/confirm`, { method: 'POST', body: JSON.stringify(body) }),
   reject: (id, body) => req<ConfirmationView>(`/confirmations/${id}/reject`, { method: 'POST', body: JSON.stringify(body) }),
   reissue: (id) => req<ConfirmationConfirmed>(`/confirmations/${id}/reissue`, { method: 'POST' }),
+  closeConfirmation: (id, body) => req<ConfirmationView>(`/confirmations/${id}/close`, { method: 'POST', body: JSON.stringify(body ?? {}) }),
 
   listPendingEvents: () => req<EmailEventList>('/events/pending'),
+  getEvent: (id) => req<EmailEventDetail>(`/events/${id}`),
+  async getEventRaw(id) {
+    const res = await fetch(`${BASE}/events/${id}/raw`, { credentials: 'include' });
+    const text = await res.text();
+    if (!res.ok) {
+      let env: { code?: string; message?: string } | undefined;
+      try { env = JSON.parse(text)?.error; } catch { /* text/plain 错误体 */ }
+      throw new ApiError(res.status, env?.code ?? 'UNKNOWN', env?.message ?? res.statusText);
+    }
+    return text;
+  },
+  confirmEvent: (id, body) => req<EmailEventConfirmResult>(`/events/${id}/confirm`, { method: 'POST', body: JSON.stringify(body) }),
+  discardEvent: (id, body) => req<EmailEventDetail>(`/events/${id}/discard`, { method: 'POST', body: JSON.stringify(body) }),
   getSchedule: (from, to) => req<ScheduleEventList>(`/schedule${qs({ from, to })}`),
 
-  listPendingConfirmations: () => {
-    throw new ApiError(501, 'NOT_IMPLEMENTED', '契约缺口：GET /confirmations 列表端点未在冻结契约中（已上报 Leader/BackendDev）');
+  testEmailAccount: (body) => req<EmailAccountTestResult>('/email-accounts/test', { method: 'POST', body: JSON.stringify(body) }),
+  listEmailAccounts: () => req<EmailAccountList>('/email-accounts'),
+  bindEmailAccount: (body) => req<EmailAccountInfo>('/email-accounts', { method: 'POST', body: JSON.stringify(body) }),
+  reauthEmailAccount: (id, body) => req<EmailAccountInfo>(`/email-accounts/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  unbindEmailAccount: (id) => req<void>(`/email-accounts/${id}`, { method: 'DELETE' }),
+
+  listNotifications: (cursor, limit) => req<NotificationList>(`/notifications${qs({ cursor, limit })}`),
+
+  getStatsOverview: (f) => req<StatsOverview>(`/stats/overview${qs({ channel: f?.channel, from: f?.from, to: f?.to })}`),
+  getStatsFunnel: (f) => req<StatsFunnel>(`/stats/funnel${qs({ channel: f?.channel, from: f?.from, to: f?.to })}`),
+  downloadStatsExport(f) {
+    const a = document.createElement('a');
+    a.href = `${BASE}/stats/export${qs({ channel: f?.channel, from: f?.from, to: f?.to })}`;
+    a.download = 'applications-export.csv';
+    a.click();
   },
-  async getConfirmationDetail(id) {
-    // 真实模式只能取得契约内字段；待确认态快照不可得（snapshotUnavailable）
-    const view = await req<ConfirmationView>(`/confirmations/${id}`);
-    const base = {
-      id, application_id: '', status: view.status,
-      fields: {}, snapshotUnavailable: view.status === '待确认',
-    } as ConfirmationDetail;
-    if (view.status === '已确认') {
-      return { ...base, confirmed_fields: view.confirmed_fields, submit_token: view.submit_token, expires_at: view.expires_at };
-    }
-    if (view.status !== '待确认') return { ...base, reason: view.reason ?? null };
-    return base;
-  },
-  closeConfirmation: () => {
-    throw new ApiError(501, 'NOT_IMPLEMENTED', '契约缺口：确认任务手动关闭端点未在冻结契约中（已上报 Leader/BackendDev）');
-  },
+
+  getReminders: () => req<ReminderSettings>('/settings/reminders'),
+  putReminders: (body) => req<ReminderSettings>('/settings/reminders', { method: 'PUT', body: JSON.stringify(body) }),
 };

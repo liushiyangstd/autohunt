@@ -1,32 +1,43 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { api, ApiError } from '../api';
+import { api } from '../api';
 import { EmptyState, Skeleton } from '../components/Feedback';
-import { metrics } from '../utils/funnel';
 import { fmtDateTime, pendingDuration, withinHours } from '../utils/time';
 
 /** D-01 工作台首页：待确认区（置顶）+ 近期日程 + 关键指标卡 */
 export default function Dashboard() {
   const nav = useNavigate();
-  const cfms = useQuery({ queryKey: ['confirmations', 'pending'], queryFn: () => api.listPendingConfirmations(), retry: false });
+  const cfms = useQuery({ queryKey: ['confirmations', 'pending'], queryFn: () => api.listConfirmations({ status: '待确认' }), retry: false });
   const events = useQuery({ queryKey: ['events', 'pending'], queryFn: () => api.listPendingEvents(), retry: false });
   const apps = useQuery({ queryKey: ['applications'], queryFn: () => api.listApplications(), retry: false });
+  const jobs = useQuery({ queryKey: ['jobs'], queryFn: () => api.listJobs(), retry: false });
   const schedule = useQuery({ queryKey: ['schedule'], queryFn: () => api.getSchedule(), retry: false });
+  // 关键指标卡（FR-52）：服务端口径，pending_items 与导航红点同口径
+  const overview = useQuery({ queryKey: ['stats', 'overview'], queryFn: () => api.getStatsOverview(), retry: false });
 
-  const pendingCfms = cfms.data ?? [];
+  const pendingCfms = cfms.data?.items ?? [];
   const pendingEvents = events.data?.items ?? [];
-  const cfmGap = cfms.error instanceof ApiError && cfms.error.status === 501;
+
+  const jobOf = (appId: string) => {
+    const app = apps.data?.items.find((a) => a.id === appId);
+    return app ? jobs.data?.items.find((j) => j.id === app.job_id) : undefined;
+  };
 
   const upcoming = (schedule.data?.items ?? [])
     .filter((e) => withinHours(e.start_time, 24 * 7))
     .sort((a, b) => a.start_time.localeCompare(b.start_time));
 
-  const m = metrics(apps.data?.items ?? [], pendingCfms.length + pendingEvents.length);
-  const cards = [
-    { label: '总投递数', value: m.total, to: '/board' },
-    { label: '进行中', value: m.active, to: '/board' },
-    { label: '待确认事项', value: m.pending, to: '/' },
-    { label: 'offer 数', value: m.offers, to: '/stats' },
+  const cards = overview.data ? [
+    { label: '总投递数', value: overview.data.total_applications, to: '/board' },
+    { label: '进行中', value: overview.data.in_progress, to: '/board' },
+    { label: '待确认事项', value: overview.data.pending_items, to: '/' },
+    { label: 'offer 数', value: overview.data.offers, to: '/stats' },
+  ] : [
+    // 统计端点未就绪（M5 实现中）时退化为本地计数，保证卡片可用
+    { label: '总投递数', value: apps.data?.items.length ?? 0, to: '/board' },
+    { label: '进行中', value: (apps.data?.items ?? []).filter((a) => ['已投递', '笔试', '面试', 'offer'].includes(a.status)).length, to: '/board' },
+    { label: '待确认事项', value: pendingCfms.length + pendingEvents.length, to: '/' },
+    { label: 'offer 数', value: (apps.data?.items ?? []).filter((a) => a.status === 'offer' || a.status === '已接受').length, to: '/stats' },
   ];
 
   return (
@@ -34,26 +45,22 @@ export default function Dashboard() {
       {/* 待确认区（置顶，warning 左边条） */}
       <section className="section">
         <h2 className="section-title">待确认投递 <span className="badge" style={{ background: 'var(--st-written-bg)', color: 'var(--color-warning)' }}>{pendingCfms.length}</span></h2>
-        {cfmGap && (
-          <div className="banner banner-warning">
-            契约缺口：冻结契约无「待确认投递列表」端点，本分组暂不可从真实后端加载（已上报）。加 ?mock=1 查看演示。
-          </div>
-        )}
-        {cfms.isLoading ? <Skeleton /> : pendingCfms.length === 0 && !cfmGap ? (
+        {cfms.isLoading ? <Skeleton /> : pendingCfms.length === 0 ? (
           <div className="card" style={{ padding: '10px 16px', color: 'var(--color-text-secondary)' }}>没有待确认事项 ✅</div>
         ) : (
           pendingCfms.map((c) => {
             const d = pendingDuration(c.created_at);
+            const job = jobOf(c.application_id);
             return (
-              <div key={c.confirmation_id} className="card pending-card" style={{ marginBottom: 8 }}>
+              <div key={c.id} className="card pending-card" style={{ marginBottom: 8 }}>
                 <div style={{ flex: 1 }}>
-                  <strong>{c.company} · {c.title}</strong>
+                  <strong>{job ? `${job.company} · ${job.title}` : `投递 ${c.application_id}`}</strong>
                   <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
                     Agent 创建于 {fmtDateTime(c.created_at)} ·{' '}
                     <span style={d.hours > 24 ? { color: 'var(--color-warning)', fontWeight: 500 } : undefined}>已挂起 {d.text}</span>
                   </div>
                 </div>
-                <Link className="btn-primary" style={{ padding: '6px 14px', borderRadius: 6, color: '#fff' }} to={`/confirmations/${c.confirmation_id}`}>去确认</Link>
+                <Link className="btn-primary" style={{ padding: '6px 14px', borderRadius: 6, color: '#fff' }} to={`/confirmations/${c.id}`}>去确认</Link>
               </div>
             );
           })

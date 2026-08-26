@@ -50,9 +50,12 @@ export default function ConfirmationPage() {
   const profile = useQuery({ queryKey: ['profile'], queryFn: () => api.getProfile(), retry: false });
   const apps = useQuery({ queryKey: ['applications'], queryFn: () => api.listApplications(), retry: false });
   const jobs = useQuery({ queryKey: ['jobs'], queryFn: () => api.listJobs(), retry: false });
+  // 已确认/已驳回/已关闭变体不携带 application_id（契约 v2），从确认单列表摘要补齐
+  const cfmList = useQuery({ queryKey: ['confirmations'], queryFn: () => api.listConfirmations(), retry: false });
 
   const c = detail.data;
-  const app = c?.application_id ? apps.data?.items.find((a) => a.id === c.application_id) : undefined;
+  const applicationId = c?.application_id ?? cfmList.data?.items.find((i) => i.id === id)?.application_id;
+  const app = applicationId ? apps.data?.items.find((a) => a.id === applicationId) : undefined;
   const job = app ? jobs.data?.items.find((j) => j.id === app.job_id) : undefined;
   const profileData = profile.data && !isProfileEmpty(profile.data) ? profile.data : undefined;
 
@@ -144,13 +147,6 @@ export default function ConfirmationPage() {
 
       {actionError && <div className="banner banner-danger">操作失败：{actionError}</div>}
 
-      {c.snapshotUnavailable && (
-        <div className="banner banner-warning">
-          契约缺口：冻结契约的「待确认」查询不返回字段快照（GET /confirmations/{'{id}'} 仅含 status），
-          对照表无法从真实后端加载。已上报待契约扩展；使用 ?mock=1 可查看完整交互。
-        </div>
-      )}
-
       {/* 主体：对照表 / 终态留档 */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <table className="confirm-table" ref={tableRef} aria-label="字段-值快照对照表">
@@ -216,12 +212,12 @@ export default function ConfirmationPage() {
         {/* 结果视图（FR-23/24，确认后） */}
         {c.status === '已确认' && (
           <div style={{ padding: 16 }}>
-            {c.submit_result?.result === 'success' && (
-              <div className="banner banner-success">✅ 提交成功 · {fmtDateTime(c.submit_result.submitted_at)}，投递状态已自动推进为「已投递」（来源：Agent 回写）</div>
+            {c.submit_result === 'success' && (
+              <div className="banner banner-success">✅ 提交成功 · {fmtDateTime(c.submitted_at)}，投递状态已自动推进为「已投递」（来源：Agent 回写）</div>
             )}
-            {c.submit_result?.result === 'failed' && (
+            {c.submit_result === 'failed' && (
               <div className="banner banner-danger" style={{ display: 'block' }}>
-                <div>❌ Agent 提交失败：{c.submit_result.fail_reason ?? '未提供原因'}</div>
+                <div>❌ Agent 提交失败：{c.fail_reason ?? '未提供原因'}</div>
                 <div style={{ marginTop: 8, fontSize: 13 }}>字段快照已在上方保留，可转人工完成：</div>
                 <div style={{ marginTop: 8 }}>
                   {job?.jd_url
