@@ -1,0 +1,79 @@
+name: CI Auto Test and Merge
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  backend-test:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dev branch
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install domain package
+        run: pip install -e ./packages/domain
+
+      - name: Install server package with dev dependencies
+        run: pip install -e "./apps/server[dev]"
+
+      - name: Run backend tests
+        run: pytest apps/server/tests
+
+  frontend-test:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dev branch
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Run frontend tests
+        working-directory: apps/web
+        run: npm run test
+
+  merge-to-main:
+    name: Merge dev into main
+    needs: [backend-test, frontend-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge dev into main
+        run: |
+          git merge --no-ff origin/dev -m "Auto-merge dev into main"
+
+      - name: Push to main
+        run: git push origin main
