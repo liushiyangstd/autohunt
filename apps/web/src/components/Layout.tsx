@@ -6,6 +6,7 @@ import { api, mockMode } from '../api';
 const NAV = [
   { to: '/', label: '工作台', icon: '🏠' },
   { to: '/resumes', label: '简历库', icon: '📄' },
+  { to: '/profile', label: '档案编辑', icon: '✏️' },
   { to: '/board', label: '岗位看板', icon: '🗂️' },
   { to: '/schedule', label: '日程', icon: '📅' },
   { to: '/stats', label: '统计', icon: '📊' },

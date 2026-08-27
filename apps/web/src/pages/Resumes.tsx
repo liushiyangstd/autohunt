@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { api, ApiError, type ResumeInfo, type ResumeParseStatus } from '../api';
 import { EmptyState, Skeleton } from '../components/Feedback';
 import Modal from '../components/Modal';
@@ -28,6 +28,7 @@ function fmtDate(iso: string) {
 /** D-02 简历库（FR-1/2/3，PROX-10） */
 export default function Resumes() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const fileRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [rename, setRename] = useState<ResumeInfo | null>(null);
@@ -39,11 +40,12 @@ export default function Resumes() {
 
   const uploadMut = useMutation({
     mutationFn: ({ file, name }: { file: File; name?: string }) => api.uploadResume(file, name),
-    onSuccess: () => {
+    onSuccess: (newResume) => {
       qc.invalidateQueries({ queryKey: ['resumes'] });
       qc.invalidateQueries({ queryKey: ['profile'] });
       setError(null);
       if (fileRef.current) fileRef.current.value = '';
+      navigate(`/profile?resume=${newResume.id}`);
     },
     onError: (e) => {
       setError(e instanceof ApiError ? e.message : String(e));
@@ -167,6 +169,7 @@ export default function Resumes() {
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <Link className="btn-text" to={`/profile?resume=${r.id}`}>查看/编辑档案</Link>
                     <a className="btn-text" href={api.resumeFileUrl(r.id)} download>下载</a>
                     {!r.is_default && (
                       <button className="btn-text" disabled={updateMut.isPending} onClick={() => updateMut.mutate({ id: r.id, body: { is_default: true } })}>
