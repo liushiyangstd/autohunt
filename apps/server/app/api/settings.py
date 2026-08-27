@@ -158,7 +158,7 @@ def put_llm(request: Request, body: LLMConfigUpdate) -> LLMConfig:
     settings = get_settings()
     with session_for(settings.data_dir) as session:
         stored = _load_llm(session)
-        stored.update(body.model_dump(exclude={"api_key"}))
+        stored.update(body.model_dump(exclude={"api_key"}, exclude_unset=True))
         if body.api_key is not None:
             if body.api_key:
                 stored["api_key_enc"] = encrypt(settings.data_dir, body.api_key)

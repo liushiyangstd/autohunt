@@ -97,6 +97,56 @@ def test_put_llm_preserves_key_when_not_provided(client, ui):
     assert reread.json()["timeout_seconds"] == 30
 
 
+def test_put_llm_partial_update_preserves_untouched_fields(client, ui):
+    # 先 PUT 完整配置：自定义 base_url / model / timeout_seconds / max_tokens
+    full = client.put(
+        "/api/v1/settings/llm",
+        json={
+            "base_url": "https://proxy.example.com/v1",
+            "model": "gpt-4o",
+            "timeout_seconds": 30,
+            "max_tokens": 4096,
+        },
+        **ui,
+    )
+    assert full.status_code == 200
+
+    # 只提交 base_url → 其余字段保持原值
+    only_base = client.put(
+        "/api/v1/settings/llm",
+        json={"base_url": "https://proxy2.example.com/v1"},
+        **ui,
+    )
+    assert only_base.status_code == 200
+    assert only_base.json()["base_url"] == "https://proxy2.example.com/v1"
+    assert only_base.json()["model"] == "gpt-4o"
+    assert only_base.json()["timeout_seconds"] == 30
+    assert only_base.json()["max_tokens"] == 4096
+    assert only_base.json()["enabled"] is True
+    assert only_base.json()["provider"] == "openai"
+
+    # 只提交 model → 其余字段保持原值，GET 复核已持久化
+    only_model = client.put("/api/v1/settings/llm", json={"model": "gpt-5"}, **ui)
+    assert only_model.status_code == 200
+    assert only_model.json()["model"] == "gpt-5"
+    assert only_model.json()["base_url"] == "https://proxy2.example.com/v1"
+    assert only_model.json()["timeout_seconds"] == 30
+    assert only_model.json()["max_tokens"] == 4096
+
+    reread = client.get("/api/v1/settings/llm", **ui)
+    assert reread.json()["model"] == "gpt-5"
+    assert reread.json()["base_url"] == "https://proxy2.example.com/v1"
+    assert reread.json()["timeout_seconds"] == 30
+    assert reread.json()["max_tokens"] == 4096
+
+    # 显式提交 base_url=null → 应清空，而非保留旧值
+    cleared = client.put("/api/v1/settings/llm", json={"base_url": None}, **ui)
+    assert cleared.status_code == 200
+    assert cleared.json()["base_url"] is None
+    assert cleared.json()["model"] == "gpt-5"
+    assert cleared.json()["max_tokens"] == 4096
+
+
 def test_post_llm_test(client, ui, monkeypatch):
     def fake_probe(base_url, api_key, model, timeout_seconds, max_tokens):
         return True, None
