@@ -10,7 +10,9 @@
 
 "use strict";
 
-var API_BASE = "http://localhost:8741";
+// 后端地址不再写死：从 chrome.storage.local 的 api_base 读取，缺省回落 8080
+// （本仓库事实标准，见 apps/web/vite.config.ts proxy target）
+var DEFAULT_API_BASE = "http://localhost:8080";
 var WEB_BASE = "http://localhost:5173";
 var FETCH_TIMEOUT_MS = 35000; // 略大于后端 30s 总超时
 
@@ -80,14 +82,15 @@ async function crawl(tab) {
       return;
     }
 
-    // 2. 读取 API key
-    var stored = await chrome.storage.local.get("apiKey");
+    // 2. 读取 API key 与后端地址
+    var stored = await chrome.storage.local.get(["apiKey", "api_base"]);
     var apiKey = (stored.apiKey || "").trim();
     if (!apiKey) {
       notify("autohunt 未配置 API key", "请先在扩展设置页粘贴 API key（Web 设置页 /#/settings 的「Agent 接入凭据」处生成）。");
       chrome.runtime.openOptionsPage();
       return;
     }
+    var apiBase = (stored.api_base || DEFAULT_API_BASE).trim().replace(/\/+$/, "");
 
     // 3. 调用后端解析（只预览，绝不自动入库）
     var body = {
@@ -104,7 +107,7 @@ async function crawl(tab) {
 
     var resp;
     try {
-      resp = await fetch(API_BASE + "/api/v1/jobs/crawl", {
+      resp = await fetch(apiBase + "/api/v1/jobs/crawl", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -118,7 +121,7 @@ async function crawl(tab) {
       if (e && e.name === "AbortError") {
         notify("autohunt 抓取超时", "解析超过 30 秒未完成，请重试或改用粘贴链接手动录入。");
       } else {
-        notify("autohunt 无法连接后端", "请确认本地服务已启动（" + API_BASE + "）。");
+        notify("autohunt 无法连接后端", "请确认本地服务已启动（" + apiBase + "），或在扩展设置页检查后端地址。");
       }
       return;
     } finally {
