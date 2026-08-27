@@ -177,4 +177,22 @@ describe('D-06 人工确认界面（BR-1）', () => {
     await waitFor(() => expect(h.state.calls.close).toBe(1));
     expect(await screen.findByText(/任务已手动关闭/)).toBeInTheDocument();
   });
+
+  it('字段元数据高亮：必填缺失 + 低置信度（PROX-18）', async () => {
+    h.state.detail = {
+      ...pendingDetail,
+      fields: { 姓名: '张三', 电话: '', 邮箱: 'qiuzhi@example.com' },
+      context: {
+        target_url: 'https://example.com/apply',
+        _field_meta: JSON.stringify({
+          姓名: { source: '结构化档案·基本信息', confidence: 'high', required: true, missing: false },
+          电话: { source: '结构化档案·基本信息', confidence: 'low', required: true, missing: true },
+          邮箱: { source: '结构化档案·基本信息', confidence: 'high', required: true, missing: false },
+        }),
+      },
+    };
+    renderPage();
+    expect(await screen.findByText('必填缺失')).toBeInTheDocument();
+    expect(screen.getByText('低置信度')).toBeInTheDocument();
+  });
 });

@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, type ApplicationStatus, type HistorySource } from '../api';
 import Modal from '../components/Modal';
+import ApplyTrigger from '../components/ApplyTrigger';
 import { ConfirmBadge, StatusBadge } from '../components/Badges';
 import { EmptyState, Skeleton } from '../components/Feedback';
 import { manualTargets } from '../utils/status';
@@ -13,6 +14,7 @@ const SOURCE_LABEL: Record<HistorySource, string> = { ui: '手动', email: '邮�
 /** D-05 岗位详情（FR-3/30/31，BR-10/11）；历史/确认记录/邮件回溯接契约 v2 读侧端点 */
 export default function JobDetail() {
   const { id = '' } = useParams();
+  const nav = useNavigate();
   const qc = useQueryClient();
   const job = useQuery({ queryKey: ['jobs', id], queryFn: () => api.getJob(id), retry: false });
   const apps = useQuery({ queryKey: ['applications'], queryFn: () => api.listApplications(), retry: false });
@@ -71,6 +73,9 @@ export default function JobDetail() {
           <button onClick={() => setStatusMenu(true)} style={{ border: 'none', background: 'none', padding: 0 }} title="点击手动推进状态（FR-30）">
             <StatusBadge status={app.status} />
           </button>
+        )}
+        {(!app || app.status === '待投递') && (
+          <ApplyTrigger jobId={id} onApplied={(cfmId) => nav(`/confirmations/${cfmId}`)} buttonClass="btn-primary" />
         )}
         {j.jd_url && <a href={j.jd_url} target="_blank" rel="noreferrer">JD 链接 ↗</a>}
         {j.channel && <span className="badge" style={{ background: 'var(--st-pending-bg)', color: 'var(--st-pending)' }}>{j.channel}</span>}

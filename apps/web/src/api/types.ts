@@ -83,6 +83,17 @@ export type JobUpdate = Partial<JobCreate>;
 export interface JobDuplicate { duplicate_of: string; job: Job }
 export type CreateJobResult = { kind: 'created'; job: Job } | { kind: 'duplicate'; duplicateOf: string; job: Job };
 
+export interface JobApplyRequest {
+  resume_id?: string | null;
+}
+
+export interface JobApplyResponse {
+  application_id: string;
+  confirmation_id: string;
+  fields: Record<string, string>;
+  context?: Record<string, string> | null;
+}
+
 export interface JobList { items: Job[]; next_cursor?: string | null }
 
 export interface Application {

@@ -1,22 +1,45 @@
-"""岗位读写（FR-21，§3.3）。"""
+"""岗位读写（FR-21，§3.3）与一键智能投递入口（PROX-18）。"""
+
+import json
 
 from fastapi import APIRouter, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlmodel import select
 
+from autohunt_domain.models import Application as ApplicationRow
+from autohunt_domain.models import Confirmation as ConfirmationRow
 from autohunt_domain.models import Job as JobRow
-from autohunt_domain.models import naive_utc
-from app.api.deps import ANY_CALLER, parse_cursor, parse_limit
-from app.auth import any_caller
+from autohunt_domain.models import Profile as ProfileRow
+from autohunt_domain.models import Resume
+from autohunt_domain.models import StatusHistory as StatusHistoryRow
+from autohunt_domain.models import naive_utc, new_id, utcnow
+from app.api.deps import ANY_CALLER, UI_ONLY, parse_cursor, parse_limit
+from app.auth import any_caller, require_ui
 from app.config import get_settings
 from app.db import session_for
-from app.errors import not_found
-from app.schemas import ErrorEnvelope, Job, JobCreate, JobDuplicate, JobList, JobUpdate
+from app.errors import not_found, state_conflict, validation_error
+from app.schemas import (
+    ConfirmationStatus,
+    ErrorEnvelope,
+    Job,
+    JobApplyRequest,
+    JobApplyResponse,
+    JobCreate,
+    JobDuplicate,
+    JobList,
+    JobUpdate,
+    ProfileBase,
+)
+from app.services import form_agent
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 COMMON_ERRORS = {
     401: {"model": ErrorEnvelope, "description": "UNAUTHORIZED — 未携带有效凭证"},
+}
+UI_ERRORS = {
+    401: {"model": ErrorEnvelope, "description": "UNAUTHORIZED — 未携带有效凭证"},
+    403: {"model": ErrorEnvelope, "description": "FORBIDDEN — 本端点仅接受 UI session 凭证"},
 }
 
 
@@ -141,3 +164,112 @@ def update_job(request: Request, job_id: str, body: JobUpdate) -> Job:
         session.commit()
         session.refresh(row)
         return _to_schema(row)
+
+
+@router.post(
+    "/{job_id}/apply",
+    response_model=JobApplyResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        **UI_ERRORS,
+        404: {"model": ErrorEnvelope, "description": "NOT_FOUND — 岗位或简历版本不存在"},
+        409: {"model": ErrorEnvelope, "description": "STATE_CONFLICT — 投递已在进行中，无法重复发起"},
+        422: {"model": ErrorEnvelope, "description": "VALIDATION_ERROR — 未选择简历或档案不可为空"},
+    },
+    summary="一键智能投递（PROX-18）",
+    description=(
+        "为指定岗位创建/复用投递记录，基于结构化档案生成字段快照并创建确认单。"
+        "返回后用户进入确认页核对字段；确认后 Agent 凭 submit_token 提交。"
+    ),
+    openapi_extra={"security": UI_ONLY},
+)
+def apply_job(request: Request, job_id: str, body: JobApplyRequest) -> JobApplyResponse:
+    require_ui(request)
+    settings = get_settings()
+    with session_for(settings.data_dir) as session:
+        job = session.exec(select(JobRow).where(JobRow.id == job_id)).first()
+        if job is None:
+            raise not_found("岗位不存在")
+
+        resume_id = body.resume_id
+        if resume_id is None:
+            default_resume = session.exec(select(Resume).where(Resume.is_default.is_(True))).first()
+            if default_resume is None:
+                raise validation_error("请先上传简历并设置默认版本")
+            resume_id = default_resume.id
+        else:
+            resume = session.exec(select(Resume).where(Resume.id == resume_id)).first()
+            if resume is None:
+                raise not_found("简历版本不存在")
+
+        application = session.exec(
+            select(ApplicationRow).where(ApplicationRow.job_id == job_id).order_by(ApplicationRow.seq.desc())
+        ).first()
+
+        if application is None:
+            application = ApplicationRow(job_id=job_id, resume_id=resume_id, status="待投递")
+            session.add(application)
+            session.commit()
+            session.refresh(application)
+            session.add(
+                StatusHistoryRow(
+                    application_id=application.id,
+                    from_status=None,
+                    to_status="待投递",
+                    source="ui",
+                    rejected=False,
+                )
+            )
+        else:
+            if application.status != "待投递":
+                raise state_conflict("该岗位已存在进行中的投递，无法再次发起一键投递")
+            application.resume_id = resume_id
+            session.add(application)
+
+        profile_row = session.exec(
+            select(ProfileRow)
+            .where(ProfileRow.resume_id == resume_id)
+            .order_by(ProfileRow.resume_version.desc())
+        ).first()
+        if profile_row is None:
+            raise validation_error("请先完善结构化档案")
+
+        profile = ProfileBase(
+            name=profile_row.name,
+            phone=profile_row.phone,
+            email=profile_row.email,
+            educations=profile_row.educations,
+            experiences=profile_row.experiences,
+            skills=profile_row.skills,
+            awards=profile_row.awards,
+            expected_city=profile_row.expected_city,
+            expected_position=profile_row.expected_position,
+        )
+
+        fields, meta = form_agent.build_snapshot(profile, target_url=job.jd_url)
+
+        request_id = f"apply:{application.id}:{new_id()}"
+        context = {
+            "target_url": job.jd_url or "",
+            "_field_meta": json.dumps(
+                {k: v.__dict__ for k, v in meta.items()}, ensure_ascii=False
+            ),
+        }
+
+        confirmation = ConfirmationRow(
+            application_id=application.id,
+            request_id=request_id,
+            fields=fields,
+            context=context,
+            status=ConfirmationStatus.pending.value,
+        )
+        session.add(confirmation)
+        session.commit()
+        session.refresh(confirmation)
+
+        return JobApplyResponse(
+            application_id=application.id,
+            confirmation_id=confirmation.id,
+            fields=fields,
+            context=context,
+        )

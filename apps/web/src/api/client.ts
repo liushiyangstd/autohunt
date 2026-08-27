@@ -6,7 +6,7 @@ import type {
   CreateJobResult, EmailAccountBind, EmailAccountInfo, EmailAccountList, EmailAccountReauth,
   EmailAccountTestResult, EmailEventConfirm, EmailEventConfirmResult, EmailEventDetail,
   EmailEventDetailList, EmailEventDiscard, EmailEventList,
-  Job, JobCreate, JobList, JobUpdate,
+  Job, JobApplyRequest, JobApplyResponse, JobCreate, JobList, JobUpdate,
   LLMConfig, LLMConfigTestResult, LLMConfigUpdate,
   NotificationList, Profile, ProfileResponse, ProfileUpdate, ReminderSettings,
   ResumeInfo, ResumeList, ResumeUpdate,
@@ -74,6 +74,7 @@ export interface AutohuntApi {
   listJobs(cursor?: string, limit?: number): Promise<JobList>;
   getJob(id: string): Promise<Job>;
   updateJob(id: string, body: JobUpdate): Promise<Job>;
+  applyJob(jobId: string, body: JobApplyRequest): Promise<JobApplyResponse>;
 
   // applications（FR-11/21/30；from/to 为契约 v2 服务端筛选）
   createApplication(body: ApplicationCreate): Promise<Application>;
@@ -195,6 +196,7 @@ export const httpApi: AutohuntApi = {
   listJobs: (cursor, limit) => req<JobList>(`/jobs${qs({ cursor, limit })}`),
   getJob: (id) => req<Job>(`/jobs/${id}`),
   updateJob: (id, body) => req<Job>(`/jobs/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  applyJob: (jobId, body) => req<JobApplyResponse>(`/jobs/${jobId}/apply`, { method: 'POST', body: JSON.stringify(body) }),
 
   createApplication: (body) => req<Application>('/applications', { method: 'POST', body: JSON.stringify(body) }),
   listApplications: (f) => req<ApplicationList>(`/applications${qs({ status: f?.status, company: f?.company, channel: f?.channel, from: f?.from, to: f?.to })}`),

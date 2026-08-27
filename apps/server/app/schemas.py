@@ -184,6 +184,21 @@ class JobUpdate(BaseModel):
     deadline: RFC3339 | None = None
 
 
+class JobApplyRequest(BaseModel):
+    """一键智能投递请求（P0）：缺省 resume_id 时使用默认简历。"""
+
+    resume_id: str | None = Field(default=None, description="选用的简历版本；省略时使用默认简历")
+
+
+class JobApplyResponse(BaseModel):
+    """一键智能投递响应：创建/复用投递记录，并生成待确认字段快照。"""
+
+    application_id: str
+    confirmation_id: str
+    fields: dict[str, str] = Field(description="Agent 填充的字段-值快照")
+    context: dict[str, str] | None = Field(default=None, description="提交上下文（含 target_url 与字段元数据）")
+
+
 class Job(BaseModel):
     id: str
     company: str

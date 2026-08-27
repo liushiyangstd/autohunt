@@ -12,7 +12,7 @@ import type {
   ConfirmationCreated, ConfirmationList, ConfirmationRecordList, ConfirmationReject,
   ConfirmationStatus, EmailAccountBind, EmailAccountInfo, EmailAccountList,
   EmailAccountReauth, EmailEvent, EmailEventConfirm, EmailEventDetail,
-  EmailEventDetailList, EmailEventDiscard, EmailEventList, Job, JobCreate, JobList,
+  EmailEventDetailList, EmailEventDiscard, EmailEventList, Job, JobApplyRequest, JobApplyResponse, JobCreate, JobList,
   JobUpdate, LLMConfig, LLMConfigTestResult, LLMConfigUpdate, NotificationList, Profile, ProfileResponse, ProfileUpdate, ReminderSettings,
   ResumeInfo, ResumeList, ResumeUpdate, ScheduleEvent, ScheduleEventList,
   StatsFilter, StatsFunnel, StatsOverview, StatusHistoryEntry, StatusHistoryList,
@@ -262,6 +262,48 @@ export const mockApi: AutohuntApi = {
     if (!j) return Promise.reject(new ApiError(404, 'NOT_FOUND', '岗位不存在'));
     Object.assign(j, body);
     return delay(j);
+  },
+  applyJob: (jobId: string, body: JobApplyRequest) => {
+    const j = mutable.jobs.find((x) => x.id === jobId);
+    if (!j) return Promise.reject(new ApiError(404, 'NOT_FOUND', '岗位不存在'));
+    const resumeId = body.resume_id ?? mutable.resumes.find((r) => r.is_default)?.id;
+    if (!resumeId) return Promise.reject(new ApiError(422, 'VALIDATION_ERROR', '请先上传简历'));
+    let app = mutable.applications.find((a) => a.job_id === jobId);
+    if (!app) {
+      app = { id: `app-${uid()}`, job_id: jobId, resume_id: resumeId, applied_at: null, status: '待投递' };
+      mutable.applications.push(app);
+      mutable.history[app.id] = [{ from_status: null, to_status: '待投递', source: 'ui', rejected: false, created_at: now() }];
+    } else if (app.status !== '待投递') {
+      return Promise.reject(new ApiError(409, 'STATE_CONFLICT', '该岗位已存在进行中的投递'));
+    } else {
+      app.resume_id = resumeId;
+    }
+    // 使用默认档案生成字段快照；其他简历先用空档案兜底
+    const profile = mutable.profile.resume_id === resumeId ? mutable.profile : {
+      name: '', phone: '', email: '', educations: [], experiences: [], skills: [], awards: [], expected_city: '', expected_position: '', resume_id: resumeId, resume_version: 1,
+    };
+    const fields: Record<string, string> = {
+      姓名: profile.name ?? '', 电话: profile.phone ?? '', 邮箱: profile.email ?? '',
+      学校: profile.educations[0]?.school ?? '', 专业: profile.educations[0]?.major ?? '', 学历: profile.educations[0]?.degree ?? '',
+      教育起止时间: `${profile.educations[0]?.start_date ?? ''} 至 ${profile.educations[0]?.end_date ?? ''}`,
+      最近公司: profile.experiences[0]?.company ?? '', 最近岗位: profile.experiences[0]?.position ?? '',
+      期望城市: profile.expected_city ?? '', 期望岗位: profile.expected_position ?? '',
+      技能: profile.skills.join('、'), 奖项: profile.awards.join('、'),
+    };
+    const meta: Record<string, { source: string; confidence: 'high' | 'medium' | 'low'; required: boolean; missing: boolean }> = {};
+    const required = new Set(['姓名', '电话', '邮箱', '学校', '专业']);
+    Object.entries(fields).forEach(([k, v]) => {
+      const missing = required.has(k) && !v.trim();
+      meta[k] = { source: '结构化档案', confidence: missing ? 'low' : v ? 'high' : 'medium', required: required.has(k), missing };
+    });
+    const cfmId = `cfm-${uid()}`;
+    const cfm: MockConfirmation = {
+      id: cfmId, application_id: app.id, request_id: `req-apply-${uid()}`,
+      fields, context: { target_url: j.jd_url || '', _field_meta: JSON.stringify(meta) },
+      status: '待确认', created_at: now(),
+    };
+    mutable.confirmations.push(cfm);
+    return delay({ application_id: app.id, confirmation_id: cfmId, fields, context: cfm.context } as JobApplyResponse);
   },
 
   createApplication: ({ job_id, resume_id }) => {

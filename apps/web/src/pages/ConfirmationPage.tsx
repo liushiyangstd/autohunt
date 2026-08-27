@@ -11,6 +11,22 @@ import { fmtDateTime, pendingDuration } from '../utils/time';
 /** 必填校验口径：对照档案必填项（D-03/§10.1：姓名/电话/邮箱 + 至少一条教育经历） */
 const REQUIRED_FIELDS = ['姓名', '电话', '邮箱'];
 
+interface FieldMeta {
+  source: string;
+  confidence: 'high' | 'medium' | 'low';
+  required: boolean;
+  missing: boolean;
+}
+
+function parseFieldMeta(context?: Record<string, string> | null): Record<string, FieldMeta> | null {
+  if (!context?._field_meta) return null;
+  try {
+    return JSON.parse(context._field_meta) as Record<string, FieldMeta>;
+  } catch {
+    return null;
+  }
+}
+
 const PROFILE_SOURCE: Record<string, keyof Profile | null> = {
   姓名: 'name', 电话: 'phone', 邮箱: 'email', 期望城市: 'expected_city', 期望岗位: 'expected_position',
   学校: null, 专业: null,
@@ -67,6 +83,7 @@ export default function ConfirmationPage() {
   const tableRef = useRef<HTMLTableElement>(null);
 
   const snapshot = c?.fields ?? {};
+  const fieldMeta = useMemo(() => parseFieldMeta(c?.context ?? null), [c?.context]);
   const isPending = c?.status === '待确认';
   const terminal = c && !isPending;
 
@@ -172,12 +189,20 @@ export default function ConfirmationPage() {
                   const modified = edited[field] !== undefined && edited[field] !== snapVal;
                   const invalid = invalidFields.has(field);
                   const source = fieldSource(field, snapVal, profileData);
+                  const meta = fieldMeta?.[field];
+                  const isRequired = meta?.required ?? REQUIRED_FIELDS.includes(field);
+                  const isMissing = meta?.missing ?? (isRequired && !snapVal.trim());
+                  const isLowConfidence = meta?.confidence === 'low';
+                  const isInconsistent = !!snapVal.trim() && source === null;
                   return (
                     <tr key={field} data-field={field} className={`${modified ? 'modified' : ''} ${invalid ? 'invalid' : ''}`}>
                       <td>
                         {field}
-                        {REQUIRED_FIELDS.includes(field) && <span style={{ color: 'var(--color-danger)' }}> *</span>}
+                        {isRequired && <span style={{ color: 'var(--color-danger)' }}> *</span>}
                         {modified && <span className="badge" style={{ marginLeft: 6, background: 'var(--st-submitted-bg)', color: 'var(--color-primary)' }}>已修改</span>}
+                        {isMissing && <span className="badge" style={{ marginLeft: 6, background: 'var(--st-rejected-bg)', color: 'var(--st-rejected)' }}>必填缺失</span>}
+                        {isLowConfidence && <span className="badge" style={{ marginLeft: 6, background: 'var(--st-written-bg)', color: 'var(--color-warning)' }}>低置信度</span>}
+                        {isInconsistent && <span className="badge" style={{ marginLeft: 6, background: 'var(--st-written-bg)', color: 'var(--color-warning)' }}>与档案不一致</span>}
                       </td>
                       <td className="snapshot-val">{snapVal || <span style={{ color: 'var(--color-text-disabled)' }}>（Agent 未填写）</span>}</td>
                       <td>
@@ -202,7 +227,7 @@ export default function ConfirmationPage() {
                         )}
                         {invalid && <div style={{ color: 'var(--color-danger)', fontSize: 12, marginTop: 4 }}>必填字段不能为空</div>}
                       </td>
-                      <td className="field-source">{source ?? '—'}</td>
+                      <td className="field-source">{source ?? (meta?.source ?? '—')}</td>
                     </tr>
                   );
                 })}

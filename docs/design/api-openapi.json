@@ -627,6 +627,104 @@
         ]
       }
     },
+    "/api/v1/jobs/{job_id}/apply": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "一键智能投递（PROX-18）",
+        "description": "为指定岗位创建/复用投递记录，基于结构化档案生成字段快照并创建确认单。返回后用户进入确认页核对字段；确认后 Agent 凭 submit_token 提交。",
+        "operationId": "apply_job_api_v1_jobs__job_id__apply_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobApplyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobApplyResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN — 本端点仅接受 UI session 凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND — 岗位或简历版本不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "STATE_CONFLICT — 投递已在进行中，无法重复发起",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "VALIDATION_ERROR — 未选择简历或档案不可为空",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          }
+        ]
+      }
+    },
     "/api/v1/applications": {
       "post": {
         "tags": [
@@ -5654,6 +5752,68 @@
           "created_at"
         ],
         "title": "Job"
+      },
+      "JobApplyRequest": {
+        "properties": {
+          "resume_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resume Id",
+            "description": "选用的简历版本；省略时使用默认简历"
+          }
+        },
+        "type": "object",
+        "title": "JobApplyRequest",
+        "description": "一键智能投递请求（P0）：缺省 resume_id 时使用默认简历。"
+      },
+      "JobApplyResponse": {
+        "properties": {
+          "application_id": {
+            "type": "string",
+            "title": "Application Id"
+          },
+          "confirmation_id": {
+            "type": "string",
+            "title": "Confirmation Id"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Fields",
+            "description": "Agent 填充的字段-值快照"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context",
+            "description": "提交上下文（含 target_url 与字段元数据）"
+          }
+        },
+        "type": "object",
+        "required": [
+          "application_id",
+          "confirmation_id",
+          "fields"
+        ],
+        "title": "JobApplyResponse",
+        "description": "一键智能投递响应：创建/复用投递记录，并生成待确认字段快照。"
       },
       "JobCreate": {
         "properties": {

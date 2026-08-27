@@ -1,17 +1,19 @@
 import { useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, type Application, type ApplicationStatus, type Job } from '../api';
 import Modal from '../components/Modal';
 import { EmptyState, Skeleton } from '../components/Feedback';
 import { BOARD_CLOSED, BOARD_COLUMNS, isTerminal, statusColor } from '../utils/status';
 import { daysUntil } from '../utils/time';
+import ApplyTrigger from '../components/ApplyTrigger';
 
 interface UndoState { appId: string; from: ApplicationStatus; to: ApplicationStatus }
 
 /** D-04 岗位看板（FR-10/11/12，BR-3/10/11） */
 export default function Board() {
   const qc = useQueryClient();
+  const nav = useNavigate();
   const jobs = useQuery({ queryKey: ['jobs'], queryFn: () => api.listJobs(), retry: false });
   const apps = useQuery({ queryKey: ['applications'], queryFn: () => api.listApplications(), retry: false });
 
@@ -101,7 +103,12 @@ export default function Board() {
             </span>
           )}
         </div>
-        <Link to={`/jobs/${a.job_id}`} style={{ fontSize: 12, display: 'inline-block', marginTop: 6 }}>详情 →</Link>
+        <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+          <Link to={`/jobs/${a.job_id}`} style={{ fontSize: 12 }}>详情 →</Link>
+          {a.status === '待投递' && j?.jd_url && (
+            <ApplyTrigger jobId={a.job_id} onApplied={(id) => nav(`/confirmations/${id}`)} buttonClass="btn-primary" />
+          )}
+        </div>
       </div>
     );
   };
