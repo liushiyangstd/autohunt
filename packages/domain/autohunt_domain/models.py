@@ -88,6 +88,37 @@ class Job(SQLModel, table=True):
     location: str | None = None
     channel: str | None = None
     deadline: datetime | None = None
+    # PROX-19 技设 §3.1：JD 原文/摘要（BR-12 替换时全量替换）
+    description: str | None = None
+    # 学历/经验/薪资/标签等扩展字段（JSON）
+    requirements: dict | None = Field(default=None, sa_column=Column(JSON))
+    # 解析置信度：high / medium / low / manual
+    confidence: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class CrawlAttempt(SQLModel, table=True):
+    """抓取审计表（PROX-19 技设 §3.2）：每次 /jobs/crawl 解析落一条，与是否入库无关。"""
+
+    __tablename__ = "crawl_attempt"
+
+    seq: int | None = Field(default=None, primary_key=True)
+    id: str = Field(default_factory=new_id, unique=True, index=True)
+    # 可空：预览阶段不写 job 表；保存/更新后由写侧回填关联
+    job_id: str | None = Field(default=None, foreign_key="job.id", index=True)
+    url: str = Field(index=True)  # 按 URL 查询历史抓取（FR-23 审计）
+    source: str  # boss/nowcoder/liepin/shixiseng/official/unknown
+    request_id: str | None = Field(default=None, index=True)  # 幂等去重与排查
+    caller: str  # ui / agent
+    status: str  # ok/partial/unsupported_site/fetch_failed/parse_failed/timeout
+    strategy: str  # structured / llm / fallback / none
+    fields_snapshot: dict | None = Field(default=None, sa_column=Column(JSON))
+    missing_fields: list = Field(default_factory=list, sa_column=Column(JSON))
+    error_code: str | None = None
+    error_message: str | None = None
+    content_truncated: bool = False
+    tokens_used: int | None = None
+    duration_ms: int | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
 

@@ -10,16 +10,22 @@ UI_TOKEN = "ah_ui_test_token_for_pytest"
 
 @pytest.fixture(autouse=True)
 def _reset_test_state():
-    """每个用例后清除 §17③ 时钟覆盖与 IMAP fake store，避免跨用例泄漏。"""
+    """每个用例后清除 §17③ 时钟覆盖、IMAP fake store 与抓取缓存/限流，避免跨用例泄漏。"""
 
     from autohunt_domain.models import set_clock_override
+    from app.services.crawl_cache import crawl_cache
+    from app.services.crawl_rate_limit import crawl_rate_limiter
     from app.services.imap_fake import get_store
 
     set_clock_override(None)
     get_store().reset()
+    crawl_cache.reset()
+    crawl_rate_limiter.reset()
     yield
     set_clock_override(None)
     get_store().reset()
+    crawl_cache.reset()
+    crawl_rate_limiter.reset()
 
 
 @pytest.fixture()

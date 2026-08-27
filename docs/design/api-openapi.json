@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "autohunt API",
-    "description": "autohunt 系统对外 API 契约（技术设计 v1.3 §3）。\n\n通用约定：JSON；错误统一信封 `{\"error\": {\"code\", \"message\", \"details?\"}}`；时间一律 RFC3339（UTC 存储、前端本地化展示）；列表分页 `?cursor=&limit=`（默认 50）。\n\n鉴权（§3.1）：Web UI 使用 HttpOnly Cookie session（UISession）；外部 Agent 使用 `Authorization: Bearer ah_live_<random>`（AgentBearer）。同一套路由双鉴权，中间件按凭证类型打标 caller ∈ {ui, agent} 供状态机来源裁决（BR-11）。\n\n错误码表：UNAUTHORIZED(401)、FORBIDDEN(403)、NOT_FOUND(404)、PERMIT_REQUIRED(403)/PERMIT_INVALID(403)（submit_token 缺失或无效）、STATE_CONFLICT(409)（状态机裁决拒绝）、VALIDATION_ERROR(422)。\n\n契约 v2 增补（技设 §3.7，M3–M5 写侧，全部仅 UI session，事件详情只读除外）：简历上传/版本管理（/resumes，FR-1/2/3）、档案写（PUT /profile，FR-2）、邮箱账户绑定/解绑/状态/重授权（/email-accounts，FR-40/44）、事件确认/丢弃/修正与原文回溯（/events/{id}/confirm|discard|raw，FR-42/43，BR-2）、通知列表（/notifications，FR-32）、统计与 CSV 导出（/stats/*，FR-50/51/52，口径 §10.4）。\n\n契约 v2 修订（0.2.1）：确认流补 4 项——GET /confirmations 列表（仅 UI）、GET /confirmations/{id} 待确认变体按 caller 区分（UI 返回快照，Agent 仍仅 status）、POST /confirmations/{id}/close 手动关闭（仅 UI）、已确认响应含提交结果回写（submit_result/fail_reason/submitted_at，FR-24）；D-05 读侧三端点（/applications/{id}/history|confirmations|emails，FR-31/24/43）；提醒偏好 GET/PUT /settings/reminders（仅 UI）；GET /applications 增可选 from/to 筛选。既有 v1 冻结 19 端点语义未变动。",
+    "description": "autohunt 系统对外 API 契约（技术设计 v1.3 §3）。\n\n通用约定：JSON；错误统一信封 `{\"error\": {\"code\", \"message\", \"details?\"}}`；时间一律 RFC3339（UTC 存储、前端本地化展示）；列表分页 `?cursor=&limit=`（默认 50）。\n\n鉴权（§3.1）：Web UI 使用 HttpOnly Cookie session（UISession）；外部 Agent 使用 `Authorization: Bearer ah_live_<random>`（AgentBearer）。同一套路由双鉴权，中间件按凭证类型打标 caller ∈ {ui, agent} 供状态机来源裁决（BR-11）。\n\n错误码表：UNAUTHORIZED(401)、FORBIDDEN(403)、NOT_FOUND(404)、PERMIT_REQUIRED(403)/PERMIT_INVALID(403)（submit_token 缺失或无效）、STATE_CONFLICT(409)（状态机裁决拒绝）、VALIDATION_ERROR(422)、RATE_LIMITED(429)（/jobs/crawl 抓取频率超限，10 次/分钟/调用方）。\n\n契约 v2 增补（技设 §3.7，M3–M5 写侧，全部仅 UI session，事件详情只读除外）：简历上传/版本管理（/resumes，FR-1/2/3）、档案写（PUT /profile，FR-2）、邮箱账户绑定/解绑/状态/重授权（/email-accounts，FR-40/44）、事件确认/丢弃/修正与原文回溯（/events/{id}/confirm|discard|raw，FR-42/43，BR-2）、通知列表（/notifications，FR-32）、统计与 CSV 导出（/stats/*，FR-50/51/52，口径 §10.4）。\n\n契约 v2 修订（0.2.1）：确认流补 4 项——GET /confirmations 列表（仅 UI）、GET /confirmations/{id} 待确认变体按 caller 区分（UI 返回快照，Agent 仍仅 status）、POST /confirmations/{id}/close 手动关闭（仅 UI）、已确认响应含提交结果回写（submit_result/fail_reason/submitted_at，FR-24）；D-05 读侧三端点（/applications/{id}/history|confirmations|emails，FR-31/24/43）；提醒偏好 GET/PUT /settings/reminders（仅 UI）；GET /applications 增可选 from/to 筛选。既有 v1 冻结 19 端点语义未变动。",
     "version": "0.2.2"
   },
   "paths": {
@@ -450,6 +450,76 @@
           },
           "401": {
             "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "UISession": []
+          },
+          {
+            "AgentBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/jobs/crawl": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "解析职位网页字段（PROX-19：只解析预览，绝不写 job 表）",
+        "description": "输入 url/source/request_id（可选 extracted 扩展预提取字段），返回 CrawlResult。boss/nowcoder 走结构化解析，official/unknown 走 LLM 兜底；30s 内同一 request_id 幂等返回同一结果（BR-4）。保存须用户确认后走 POST /jobs（BR：绝不自动入库）。",
+        "operationId": "crawl_job_endpoint_api_v1_jobs_crawl_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CrawlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrawlResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHORIZED — 未携带有效凭证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED — 抓取频率超限（10 次/分钟/调用方）",
             "content": {
               "application/json": {
                 "schema": {
@@ -4796,6 +4866,395 @@
         "title": "ConfirmationStatus",
         "description": "§10.3 确认流状态。"
       },
+      "CrawlErrorCode": {
+        "type": "string",
+        "enum": [
+          "RATE_LIMITED",
+          "LLM_NOT_CONFIGURED",
+          "COST_LIMIT_EXCEEDED"
+        ],
+        "title": "CrawlErrorCode",
+        "description": "解析级错误码（技设 §7.2）；HTTP 层 429 用信封 ErrorCode.RATE_LIMITED。"
+      },
+      "CrawlExtracted": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "company": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content",
+            "description": "页面可见文本（LLM 兜底路径输入）"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "deadline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadline",
+            "description": "允许 date-only，归一化为当天 23:59:59 UTC"
+          },
+          "salary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Salary"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "requirements": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requirements"
+          }
+        },
+        "type": "object",
+        "title": "CrawlExtracted",
+        "description": "扩展预提取字段（技设 §4.3）：结构化站点已传时后端只校验归一化，不再拉取页面。"
+      },
+      "CrawlFieldConfidence": {
+        "type": "string",
+        "enum": [
+          "high",
+          "medium",
+          "low",
+          "manual"
+        ],
+        "title": "CrawlFieldConfidence",
+        "description": "解析置信度（技设 §3.1）：manual 为用户手填。"
+      },
+      "CrawlRequest": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "source": {
+            "$ref": "#/components/schemas/CrawlSource",
+            "default": "unknown"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id",
+            "description": "调用方幂等键；30s 内同一 request_id 返回同一结果（BR-4）"
+          },
+          "extracted": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CrawlExtracted"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "url",
+          "request_id"
+        ],
+        "title": "CrawlRequest"
+      },
+      "CrawlResult": {
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/CrawlStatus"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CrawlResultFields"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "missing_fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Fields",
+            "description": "缺失的核心字段名（company/title 缺失时保存置灰）",
+            "default": []
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CrawlFieldConfidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CrawlErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "content_truncated": {
+            "type": "boolean",
+            "title": "Content Truncated",
+            "description": "LLM 输入超 8000 tokens 被截断（AC-12）",
+            "default": false
+          },
+          "tokens_used": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Used"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "CrawlResult",
+        "description": "解析预览结果（BR：绝不自动入库，须用户确认后走 POST /jobs 保存）。"
+      },
+      "CrawlResultFields": {
+        "properties": {
+          "company": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "jd_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jd Url"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel"
+          },
+          "deadline": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "description": "RFC3339 时间戳（UTC 存储）"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadline"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "requirements": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requirements"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CrawlFieldConfidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "crawl_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crawl Request Id",
+            "description": "保存抓取预览时回传 CrawlResult.request_id，用于关联 crawl_attempt"
+          }
+        },
+        "type": "object",
+        "title": "CrawlResultFields",
+        "description": "技设 §3.3：复用 JobCreate 映射并扩展新增字段；company/title 可空以承载 partial 结果（AC-6）。"
+      },
+      "CrawlSource": {
+        "type": "string",
+        "enum": [
+          "boss",
+          "nowcoder",
+          "liepin",
+          "shixiseng",
+          "official",
+          "unknown"
+        ],
+        "title": "CrawlSource",
+        "description": "抓取来源站点；boss/nowcoder 走结构化解析，official/unknown 走 LLM 兜底，其余不支持。"
+      },
+      "CrawlStatus": {
+        "type": "string",
+        "enum": [
+          "ok",
+          "partial",
+          "unsupported_site",
+          "fetch_failed",
+          "parse_failed",
+          "timeout"
+        ],
+        "title": "CrawlStatus",
+        "description": "解析结果状态（技设 §3.2 crawl_attempt.status 同口径）。"
+      },
       "Education": {
         "properties": {
           "school": {
@@ -5417,7 +5876,8 @@
           "PERMIT_REQUIRED",
           "PERMIT_INVALID",
           "STATE_CONFLICT",
-          "VALIDATION_ERROR"
+          "VALIDATION_ERROR",
+          "RATE_LIMITED"
         ],
         "title": "ErrorCode"
       },
@@ -5639,6 +6099,40 @@
             ],
             "title": "Deadline"
           },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "requirements": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requirements"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -5710,6 +6204,52 @@
               }
             ],
             "title": "Deadline"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "requirements": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requirements"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "crawl_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crawl Request Id",
+            "description": "保存抓取预览时回传 CrawlResult.request_id，用于关联 crawl_attempt"
           }
         },
         "type": "object",
@@ -5834,6 +6374,52 @@
               }
             ],
             "title": "Deadline"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "requirements": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requirements"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "crawl_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crawl Request Id",
+            "description": "更新抓取预览岗位时回传 CrawlResult.request_id，用于关联 crawl_attempt"
           }
         },
         "type": "object",
