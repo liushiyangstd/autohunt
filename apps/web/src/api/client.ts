@@ -157,7 +157,8 @@ function qs(params: Record<string, string | number | undefined>): string {
 
 /** 真实后端客户端 —— 只调用契约 v2 内的端点 */
 export const httpApi: AutohuntApi = {
-  listKeys: async () => (await req<{ items: ApiKeyInfo[] }>('/keys')).items,
+  // 契约：GET /keys 返回裸数组 ApiKeyInfo[]（非 {items} 信封；React Query 不允许 queryFn 返回 undefined）
+  listKeys: () => req<ApiKeyInfo[]>('/keys'),
   createKey: (body) => req<ApiKeyCreated>('/keys', { method: 'POST', body: JSON.stringify(body) }),
   revokeKey: (id) => req<void>(`/keys/${id}`, { method: 'DELETE' }),
 
