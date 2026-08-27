@@ -10,7 +10,7 @@ import type {
   ApiKeyCreated, ApiKeyInfo, Application, ApplicationList, ApplicationStatus,
   ApplicationUpdate, ConfirmationClose, ConfirmationConfirmed, ConfirmationCreate,
   ConfirmationCreated, ConfirmationList, ConfirmationRecordList, ConfirmationReject,
-  ConfirmationStatus, EmailAccountBind, EmailAccountInfo, EmailAccountList,
+  ConfirmationStatus, CrawlRequest, CrawlResult, EmailAccountBind, EmailAccountInfo, EmailAccountList,
   EmailAccountReauth, EmailEvent, EmailEventConfirm, EmailEventDetail,
   EmailEventDetailList, EmailEventDiscard, EmailEventList, Job, JobCreate, JobList,
   JobUpdate, LLMConfig, LLMConfigTestResult, LLMConfigUpdate, NotificationList, Profile, ProfileResponse, ProfileUpdate, ReminderSettings,
@@ -262,6 +262,29 @@ export const mockApi: AutohuntApi = {
     if (!j) return Promise.reject(new ApiError(404, 'NOT_FOUND', '岗位不存在'));
     Object.assign(j, body);
     return delay(j);
+  },
+
+  // PROX-19 演示：仅解析预览，绝不写 mutable.jobs；url 含 unsupported/403 演示失败态
+  // channel 与真实后端同口径：回填 source 枚举（技设 §3.3），由 JobNew 映射到渠道词表
+  crawlJob: (body: CrawlRequest) => {
+    const base = { missing_fields: [] as string[], error_code: null, error_message: null, content_truncated: false, tokens_used: null, request_id: body.request_id };
+    if (body.url.includes('unsupported')) {
+      return delay({ ...base, status: 'unsupported_site', fields: null, missing_fields: ['company', 'title'], confidence: null, error_message: 'mock：暂不支持该站点的自动解析' } as CrawlResult);
+    }
+    if (body.url.includes('403')) {
+      return delay({ ...base, status: 'fetch_failed', fields: null, confidence: null, error_message: 'mock：目标页面返回 403（反爬拦截）' } as CrawlResult);
+    }
+    return delay({
+      ...base, status: 'partial', confidence: 'medium', tokens_used: 860,
+      missing_fields: ['title'],
+      fields: {
+        company: '示例科技', title: null, jd_url: body.url, location: '杭州',
+        channel: body.source === 'boss' ? 'boss' : body.source === 'nowcoder' ? 'nowcoder' : null,
+        deadline: null, description: '（mock 演示）负责后端服务的设计与开发，参与核心链路稳定性建设。',
+        requirements: { salary: '25k-40k·14薪', degree: '本科', experience: '3-5年', tags: ['Java', 'MySQL'] },
+        confidence: 'medium',
+      },
+    } as CrawlResult);
   },
 
   createApplication: ({ job_id, resume_id }) => {

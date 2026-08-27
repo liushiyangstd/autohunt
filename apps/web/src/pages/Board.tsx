@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, type Application, type ApplicationStatus, type Job } from '../api';
 import Modal from '../components/Modal';
@@ -12,6 +12,7 @@ interface UndoState { appId: string; from: ApplicationStatus; to: ApplicationSta
 /** D-04 岗位看板（FR-10/11/12，BR-3/10/11） */
 export default function Board() {
   const qc = useQueryClient();
+  const nav = useNavigate();
   const jobs = useQuery({ queryKey: ['jobs'], queryFn: () => api.listJobs(), retry: false });
   const apps = useQuery({ queryKey: ['applications'], queryFn: () => api.listApplications(), retry: false });
 
@@ -92,14 +93,20 @@ export default function Board() {
       >
         <div className="company">{j?.company ?? '未知公司'}</div>
         <div>{j?.title ?? '未知岗位'}</div>
+        {/* AC-8：地点/渠道/截止空值给默认文案 */}
+        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>{j?.location ?? '地点未填'}</div>
         <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-          {j?.channel && <span className="badge" style={{ background: 'var(--st-pending-bg)', color: 'var(--st-pending)' }}>{j.channel}</span>}
+          {j?.channel
+            ? <span className="badge" style={{ background: 'var(--st-pending-bg)', color: 'var(--st-pending)' }}>{j.channel}</span>
+            : <span className="badge" style={{ background: 'var(--st-closed-bg)', color: 'var(--color-text-disabled)' }}>渠道未填</span>}
           {a.status === '面试' && a.interview_round && <span className="badge" style={{ background: 'var(--st-interview-bg)', color: 'var(--st-interview)' }}>面试·{['一', '二', '三', '四', '五'][a.interview_round - 1] ?? a.interview_round}面</span>}
-          {dLeft !== null && !isTerminal(a.status) && a.status === '待投递' && (
+          {!isTerminal(a.status) && a.status === '待投递' && (dLeft !== null ? (
             <span className="badge num" style={dLeft <= 3 ? { background: 'var(--st-written-bg)', color: 'var(--color-warning)' } : { background: 'var(--st-pending-bg)', color: 'var(--color-text-secondary)' }}>
               {dLeft < 0 ? '已截止' : `截止 ${dLeft} 天`}
             </span>
-          )}
+          ) : (
+            <span className="badge" style={{ background: 'var(--st-closed-bg)', color: 'var(--color-text-disabled)' }}>截止未定</span>
+          ))}
         </div>
         <Link to={`/jobs/${a.job_id}`} style={{ fontSize: 12, display: 'inline-block', marginTop: 6 }}>详情 →</Link>
       </div>
@@ -110,6 +117,7 @@ export default function Board() {
     <div>
       <div className="toolbar">
         <button className="btn-primary" onClick={() => setShowCreate(true)}>+ 录入岗位</button>
+        <button onClick={() => nav('/jobs/new')}>粘贴链接抓取</button>
         <input placeholder="搜索公司 / 岗位（FR-12）" value={keyword} onChange={(e) => setKeyword(e.target.value)} style={{ width: 220 }} />
         <select value={channel} onChange={(e) => setChannel(e.target.value)} aria-label="渠道筛选">
           <option value="">全部渠道</option>
@@ -210,6 +218,9 @@ function CreateJobModal({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal title="录入岗位" onClose={onClose}>
+      <div style={{ marginBottom: 12, fontSize: 13 }}>
+        <Link to="/jobs/new">粘贴链接自动抓取（BOSS / 牛客 / 官网）→</Link>
+      </div>
       <div className="form-grid">
         <div className="form-field"><label>公司 <span className="required-mark">*</span></label>
           <input value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} autoFocus /></div>

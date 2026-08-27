@@ -14,7 +14,9 @@ export type ConfirmationStatus = '待确认' | '已确认' | '已驳回' | '已�
 
 export type ErrorCode =
   | 'UNAUTHORIZED' | 'FORBIDDEN' | 'NOT_FOUND'
-  | 'PERMIT_REQUIRED' | 'PERMIT_INVALID' | 'STATE_CONFLICT' | 'VALIDATION_ERROR';
+  | 'PERMIT_REQUIRED' | 'PERMIT_INVALID' | 'STATE_CONFLICT' | 'VALIDATION_ERROR'
+  /** PROX-19：/jobs/crawl 抓取频率超限（429，10 次/分钟/调用方） */
+  | 'RATE_LIMITED';
 
 export interface ErrorEnvelope {
   error: { code: ErrorCode; message: string; details?: unknown };
@@ -65,6 +67,12 @@ export interface Job {
   location?: string | null;
   channel?: string | null;
   deadline?: string | null; // RFC3339 UTC
+  /** PROX-19：JD 描述（抓取预览保存时随岗位入库） */
+  description?: string | null;
+  /** PROX-19：学历/经验/薪资/标签等扩展要求（JSON） */
+  requirements?: Record<string, unknown> | null;
+  /** PROX-19：解析置信度 high/medium/low/manual */
+  confidence?: string | null;
   created_at: string;
 }
 
@@ -75,6 +83,11 @@ export interface JobCreate {
   location?: string | null;
   channel?: string | null;
   deadline?: string | null;
+  description?: string | null;
+  requirements?: Record<string, unknown> | null;
+  confidence?: string | null;
+  /** PROX-19：保存抓取预览时回传 CrawlResult.request_id，回填 crawl_attempt 关联 */
+  crawl_request_id?: string | null;
 }
 
 export type JobUpdate = Partial<JobCreate>;
@@ -84,6 +97,68 @@ export interface JobDuplicate { duplicate_of: string; job: Job }
 export type CreateJobResult = { kind: 'created'; job: Job } | { kind: 'duplicate'; duplicateOf: string; job: Job };
 
 export interface JobList { items: Job[]; next_cursor?: string | null }
+
+// ---- PROX-19：网页职位抓取预览（POST /jobs/crawl，只解析预览，绝不自动入库） ----
+
+export type CrawlSource = 'boss' | 'nowcoder' | 'liepin' | 'shixiseng' | 'official' | 'unknown';
+
+export type CrawlStatus = 'ok' | 'partial' | 'unsupported_site' | 'fetch_failed' | 'parse_failed' | 'timeout';
+
+/** 解析级错误码；HTTP 层 429 走信封 ErrorCode.RATE_LIMITED */
+export type CrawlErrorCode = 'RATE_LIMITED' | 'LLM_NOT_CONFIGURED' | 'COST_LIMIT_EXCEEDED';
+
+export type CrawlFieldConfidence = 'high' | 'medium' | 'low' | 'manual';
+
+/** 扩展预提取字段：结构化站点已传时后端只校验归一化，不再拉取页面 */
+export interface CrawlExtracted {
+  title?: string | null;
+  company?: string | null;
+  /** 页面可见文本（LLM 兜底路径输入） */
+  content?: string | null;
+  location?: string | null;
+  /** 允许 date-only，后端归一化为当天 23:59:59 UTC */
+  deadline?: string | null;
+  salary?: string | null;
+  description?: string | null;
+  requirements?: Record<string, unknown> | null;
+}
+
+export interface CrawlRequest {
+  url: string;
+  source?: CrawlSource;
+  /** 调用方幂等键；30s 内同一 request_id 返回同一结果（BR-4） */
+  request_id: string;
+  extracted?: CrawlExtracted | null;
+}
+
+/** 复用 JobCreate 映射并扩展；company/title 可空以承载 partial 结果（AC-6） */
+export interface CrawlResultFields {
+  company?: string | null;
+  title?: string | null;
+  jd_url?: string | null;
+  location?: string | null;
+  channel?: string | null;
+  deadline?: string | null;
+  description?: string | null;
+  requirements?: Record<string, unknown> | null;
+  confidence?: CrawlFieldConfidence | null;
+  crawl_request_id?: string | null;
+}
+
+/** 解析预览结果（BR：绝不自动入库，须用户确认后走 POST /jobs 保存） */
+export interface CrawlResult {
+  status: CrawlStatus;
+  fields?: CrawlResultFields | null;
+  /** 缺失的核心字段名（company/title 缺失时保存置灰） */
+  missing_fields: string[];
+  confidence?: CrawlFieldConfidence | null;
+  error_code?: CrawlErrorCode | null;
+  error_message?: string | null;
+  /** LLM 输入超 8000 tokens 被截断（AC-12） */
+  content_truncated: boolean;
+  tokens_used?: number | null;
+  request_id?: string | null;
+}
 
 export interface Application {
   id: string;
