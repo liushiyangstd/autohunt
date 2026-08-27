@@ -16,3 +16,5 @@ data/
 .cursor/
 .trellis/
 .omc/
+AGENTS.md
+.gitattributes
