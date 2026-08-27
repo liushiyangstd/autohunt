@@ -6,6 +6,7 @@ import Resumes from './pages/Resumes';
 import ProfileEdit from './pages/ProfileEdit';
 import Board from './pages/Board';
 import JobDetail from './pages/JobDetail';
+import JobNew from './pages/JobNew';
 import ConfirmationPage from './pages/ConfirmationPage';
 import PendingEvents from './pages/PendingEvents';
 import Schedule from './pages/Schedule';
@@ -21,6 +22,7 @@ export default function App() {
           <Route path="resumes" element={<Resumes />} />
           <Route path="profile" element={<ProfileEdit />} />
           <Route path="board" element={<Board />} />
+          <Route path="jobs/new" element={<JobNew />} />
           <Route path="jobs/:id" element={<JobDetail />} />
           <Route path="confirmations/:id" element={<ConfirmationPage />} />
           <Route path="events" element={<PendingEvents />} />

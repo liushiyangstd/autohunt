@@ -33,6 +33,7 @@ class ErrorCode(str, Enum):
     PERMIT_INVALID = "PERMIT_INVALID"
     STATE_CONFLICT = "STATE_CONFLICT"
     VALIDATION_ERROR = "VALIDATION_ERROR"
+    RATE_LIMITED = "RATE_LIMITED"  # PROX-19：抓取频率超限（429，10 次/分钟/调用方）
 
 
 class ErrorBody(BaseModel):
@@ -173,6 +174,14 @@ class JobCreate(BaseModel):
     location: str | None = None
     channel: str | None = None
     deadline: RFC3339 | None = None
+    # PROX-19 技设 §3.1：JD 描述 / 要求（JSON）/ 置信度，保存抓取预览时随岗位入库
+    description: str | None = None
+    requirements: dict[str, Any] | None = None
+    confidence: str | None = None
+    # PROX-19 技设 §3.2：保存时回填 crawl_attempt.job_id（抓取预览不持久化，保存才关联）
+    crawl_request_id: str | None = Field(
+        default=None, description="保存抓取预览时回传 CrawlResult.request_id，用于关联 crawl_attempt"
+    )
 
 
 class JobUpdate(BaseModel):
@@ -182,6 +191,13 @@ class JobUpdate(BaseModel):
     location: str | None = None
     channel: str | None = None
     deadline: RFC3339 | None = None
+    description: str | None = None
+    requirements: dict[str, Any] | None = None
+    confidence: str | None = None
+    # PROX-19 技设 §3.2：更新已有岗位时回填 crawl_attempt.job_id（AC-2 关联记录）
+    crawl_request_id: str | None = Field(
+        default=None, description="更新抓取预览岗位时回传 CrawlResult.request_id，用于关联 crawl_attempt"
+    )
 
 
 class Job(BaseModel):
@@ -192,6 +208,9 @@ class Job(BaseModel):
     location: str | None = None
     channel: str | None = None
     deadline: RFC3339 | None = None
+    description: str | None = None
+    requirements: dict[str, Any] | None = None
+    confidence: str | None = None
     created_at: RFC3339
 
 
@@ -205,6 +224,90 @@ class JobDuplicate(BaseModel):
 class JobList(BaseModel):
     items: list[Job]
     next_cursor: str | None = None
+
+
+# ---------- jobs/crawl（PROX-19，技设 §7.2：只解析预览，绝不写 job 表） ----------
+
+
+class CrawlSource(str, Enum):
+    """抓取来源站点；boss/nowcoder 走结构化解析，official/unknown 走 LLM 兜底，其余不支持。"""
+
+    boss = "boss"
+    nowcoder = "nowcoder"
+    liepin = "liepin"
+    shixiseng = "shixiseng"
+    official = "official"
+    unknown = "unknown"
+
+
+class CrawlStatus(str, Enum):
+    """解析结果状态（技设 §3.2 crawl_attempt.status 同口径）。"""
+
+    ok = "ok"
+    partial = "partial"
+    unsupported_site = "unsupported_site"
+    fetch_failed = "fetch_failed"
+    parse_failed = "parse_failed"
+    timeout = "timeout"
+
+
+class CrawlErrorCode(str, Enum):
+    """解析级错误码（技设 §7.2）；HTTP 层 429 用信封 ErrorCode.RATE_LIMITED。"""
+
+    RATE_LIMITED = "RATE_LIMITED"
+    LLM_NOT_CONFIGURED = "LLM_NOT_CONFIGURED"
+    COST_LIMIT_EXCEEDED = "COST_LIMIT_EXCEEDED"
+
+
+class CrawlFieldConfidence(str, Enum):
+    """解析置信度（技设 §3.1）：manual 为用户手填。"""
+
+    high = "high"
+    medium = "medium"
+    low = "low"
+    manual = "manual"
+
+
+class CrawlExtracted(BaseModel):
+    """扩展预提取字段（技设 §4.3）：结构化站点已传时后端只校验归一化，不再拉取页面。"""
+
+    title: str | None = None
+    company: str | None = None
+    content: str | None = Field(default=None, description="页面可见文本（LLM 兜底路径输入）")
+    location: str | None = None
+    deadline: str | None = Field(default=None, description="允许 date-only，归一化为当天 23:59:59 UTC")
+    salary: str | None = None
+    description: str | None = None
+    requirements: dict[str, Any] | None = None
+
+
+class CrawlRequest(BaseModel):
+    url: str
+    source: CrawlSource = CrawlSource.unknown
+    request_id: str = Field(description="调用方幂等键；30s 内同一 request_id 返回同一结果（BR-4）")
+    extracted: CrawlExtracted | None = None
+
+
+class CrawlResultFields(JobCreate):
+    """技设 §3.3：复用 JobCreate 映射并扩展新增字段；company/title 可空以承载 partial 结果（AC-6）。"""
+
+    company: str | None = None  # type: ignore[assignment]
+    title: str | None = None  # type: ignore[assignment]
+    confidence: CrawlFieldConfidence | None = None
+
+
+class CrawlResult(BaseModel):
+    """解析预览结果（BR：绝不自动入库，须用户确认后走 POST /jobs 保存）。"""
+
+    status: CrawlStatus
+    fields: CrawlResultFields | None = None
+    missing_fields: list[str] = Field(default=[], description="缺失的核心字段名（company/title 缺失时保存置灰）")
+    confidence: CrawlFieldConfidence | None = None
+    error_code: CrawlErrorCode | None = None
+    error_message: str | None = None
+    content_truncated: bool = Field(default=False, description="LLM 输入超 8000 tokens 被截断（AC-12）")
+    tokens_used: int | None = None
+    request_id: str | None = None
 
 
 class ApplicationCreate(BaseModel):

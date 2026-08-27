@@ -3,7 +3,7 @@ import type {
   Application, ApplicationCreate, ApplicationList, ApplicationUpdate,
   ConfirmationClose, ConfirmationConfirm, ConfirmationConfirmed, ConfirmationCreate, ConfirmationCreated,
   ConfirmationList, ConfirmationRecordList, ConfirmationReject, ConfirmationStatus, ConfirmationView,
-  CreateJobResult, EmailAccountBind, EmailAccountInfo, EmailAccountList, EmailAccountReauth,
+  CreateJobResult, CrawlRequest, CrawlResult, EmailAccountBind, EmailAccountInfo, EmailAccountList, EmailAccountReauth,
   EmailAccountTestResult, EmailEventConfirm, EmailEventConfirmResult, EmailEventDetail,
   EmailEventDetailList, EmailEventDiscard, EmailEventList,
   Job, JobCreate, JobList, JobUpdate,
@@ -74,6 +74,9 @@ export interface AutohuntApi {
   listJobs(cursor?: string, limit?: number): Promise<JobList>;
   getJob(id: string): Promise<Job>;
   updateJob(id: string, body: JobUpdate): Promise<Job>;
+
+  // jobs/crawl（PROX-19：只解析预览，绝不写 job 表；429 走信封 RATE_LIMITED）
+  crawlJob(body: CrawlRequest): Promise<CrawlResult>;
 
   // applications（FR-11/21/30；from/to 为契约 v2 服务端筛选）
   createApplication(body: ApplicationCreate): Promise<Application>;
@@ -154,7 +157,8 @@ function qs(params: Record<string, string | number | undefined>): string {
 
 /** 真实后端客户端 —— 只调用契约 v2 内的端点 */
 export const httpApi: AutohuntApi = {
-  listKeys: async () => (await req<{ items: ApiKeyInfo[] }>('/keys')).items,
+  // 契约：GET /keys 返回裸数组 ApiKeyInfo[]（非 {items} 信封；React Query 不允许 queryFn 返回 undefined）
+  listKeys: () => req<ApiKeyInfo[]>('/keys'),
   createKey: (body) => req<ApiKeyCreated>('/keys', { method: 'POST', body: JSON.stringify(body) }),
   revokeKey: (id) => req<void>(`/keys/${id}`, { method: 'DELETE' }),
 
@@ -195,6 +199,8 @@ export const httpApi: AutohuntApi = {
   listJobs: (cursor, limit) => req<JobList>(`/jobs${qs({ cursor, limit })}`),
   getJob: (id) => req<Job>(`/jobs/${id}`),
   updateJob: (id, body) => req<Job>(`/jobs/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+
+  crawlJob: (body) => req<CrawlResult>('/jobs/crawl', { method: 'POST', body: JSON.stringify(body) }),
 
   createApplication: (body) => req<Application>('/applications', { method: 'POST', body: JSON.stringify(body) }),
   listApplications: (f) => req<ApplicationList>(`/applications${qs({ status: f?.status, company: f?.company, channel: f?.channel, from: f?.from, to: f?.to })}`),

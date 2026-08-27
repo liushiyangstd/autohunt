@@ -10,3 +10,11 @@ data/
 *.egg-info/
 *.log
 *.tsbuildinfo
+
+# Local tooling / agent state
+.claude/
+.cursor/
+.trellis/
+.omc/
+AGENTS.md
+.gitattributes

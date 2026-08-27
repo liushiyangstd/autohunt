@@ -41,7 +41,9 @@ export default function Layout() {
   const [drawer, setDrawer] = useState(false);
   const location = useLocation();
   const title = NAV.find((n) => (n.to === '/' ? location.pathname === '/' : location.pathname.startsWith(n.to)))?.label
-    ?? (location.pathname.startsWith('/confirmations') ? '投递确认' : location.pathname.startsWith('/jobs') ? '岗位详情' : '工作台');
+    ?? (location.pathname.startsWith('/confirmations') ? '投递确认'
+      : location.pathname === '/jobs/new' ? '录入岗位'
+        : location.pathname.startsWith('/jobs') ? '岗位详情' : '工作台');
 
   return (
     <div className="app-shell">

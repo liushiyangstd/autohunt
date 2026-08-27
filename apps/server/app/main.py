@@ -10,6 +10,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
     applications,
@@ -58,7 +59,8 @@ app = FastAPI(
         "中间件按凭证类型打标 caller ∈ {ui, agent} 供状态机来源裁决（BR-11）。\n\n"
         "错误码表：UNAUTHORIZED(401)、FORBIDDEN(403)、NOT_FOUND(404)、"
         "PERMIT_REQUIRED(403)/PERMIT_INVALID(403)（submit_token 缺失或无效）、"
-        "STATE_CONFLICT(409)（状态机裁决拒绝）、VALIDATION_ERROR(422)。\n\n"
+        "STATE_CONFLICT(409)（状态机裁决拒绝）、VALIDATION_ERROR(422)、"
+        "RATE_LIMITED(429)（/jobs/crawl 抓取频率超限，10 次/分钟/调用方）。\n\n"
         "契约 v2 增补（技设 §3.7，M3–M5 写侧，全部仅 UI session，事件详情只读除外）："
         "简历上传/版本管理（/resumes，FR-1/2/3）、档案写（PUT /profile，FR-2）、"
         "邮箱账户绑定/解绑/状态/重授权（/email-accounts，FR-40/44）、"
@@ -103,6 +105,16 @@ app.include_router(ui.router, prefix="/api/v1")
 
 app.add_exception_handler(ApiError, api_error_handler)
 app.add_middleware(AuthMiddleware)
+
+# PROX-19 技设 §8.1：浏览器扩展跨域调用 /jobs/crawl。后添加者为最外层，
+# CORS 在 Auth 之外，OPTIONS 预检不经鉴权中间件（否则一律 401）。
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_settings().cors_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-Id"],
+)
 
 if get_settings().test_hooks:
     from app import testhooks

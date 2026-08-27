@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "autohunt 职位抓取",
+  "version": "0.1.0",
+  "description": "抓取当前职位页（BOSS 直聘 / 牛客 / 其他站点走 LLM 兜底），解析后打开 autohunt 预览页，用户确认保存后入库。",
+  "permissions": ["activeTab", "storage", "scripting", "notifications"],
+  "host_permissions": ["http://localhost:8080/*", "http://localhost:8741/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "抓取当前职位页到 autohunt"
+  },
+  "options_page": "options.html"
+}

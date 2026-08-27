@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>autohunt 抓取扩展设置</title>
+  <style>
+    body { font-family: system-ui, "Microsoft YaHei", sans-serif; max-width: 560px; margin: 40px auto; padding: 0 16px; color: #222; }
+    h1 { font-size: 20px; }
+    label { display: block; margin: 16px 0 6px; font-weight: 600; }
+    input[type="text"] { width: 100%; box-sizing: border-box; padding: 8px 10px; font-family: monospace; border: 1px solid #ccc; border-radius: 6px; }
+    button { margin-top: 16px; padding: 8px 20px; border: none; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+    #status { margin-top: 12px; color: #16a34a; min-height: 1.2em; }
+    .hint { margin-top: 24px; font-size: 13px; color: #555; line-height: 1.7; }
+    code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>autohunt 抓取扩展设置</h1>
+
+  <label for="apiKey">API key（ah_live_ 开头）</label>
+  <input type="text" id="apiKey" placeholder="ah_live_..." autocomplete="off" />
+
+  <label for="apiBase">后端地址（与后端 uvicorn 端口一致）</label>
+  <input type="text" id="apiBase" placeholder="http://localhost:8080" autocomplete="off" />
+
+  <button id="save">保存</button>
+  <div id="status"></div>
+
+  <div class="hint">
+    <p>API key 在 autohunt Web 设置页生成：打开
+      <a href="http://localhost:5173/#/settings" target="_blank">http://localhost:5173/#/settings</a>（「Agent 接入凭据」一节），
+      创建密钥后完整复制（仅显示一次），粘贴到此处。</p>
+    <p>后端地址默认为 <code>http://localhost:8080</code>；若你的后端跑在其他端口（如 8741），请改成对应地址，格式 <code>http://host:port</code>（不带尾部斜杠）。</p>
+    <p>使用：在 BOSS 直聘 / 牛客 / 公司官网职位详情页点击扩展图标，解析完成后会自动打开预览页，确认无误再保存入库。</p>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { BrowserRouter } from 'react-router-dom';
+import { HashRouter } from 'react-router-dom';
 import App from './App';
 import { mockMode, ensureUiSession } from './api';
 import './theme.css';
@@ -19,9 +19,10 @@ async function start() {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <QueryClientProvider client={qc}>
-        <BrowserRouter>
+        {/* HashRouter：浏览器扩展跳转入口为 /#/jobs/new?prefill=...（PROX-19 契约）；?mock=1 仍在 hash 之前，不受影响 */}
+        <HashRouter>
           <App />
-        </BrowserRouter>
+        </HashRouter>
       </QueryClientProvider>
     </StrictMode>,
   );
