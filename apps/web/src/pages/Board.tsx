@@ -9,7 +9,10 @@ import { daysUntil } from '../utils/time';
 
 interface UndoState { appId: string; from: ApplicationStatus; to: ApplicationStatus }
 
-/** D-04 岗位看板（FR-10/11/12，BR-3/10/11） */
+/** 看板卡片：以岗位为主键；app 为该岗位最新投递记录（无 → 未投递列） */
+interface BoardCard { job: Job; app: Application | null }
+
+/** D-04 岗位看板（FR-10/11/12，BR-3/10/11）：展示全部岗位，无投递记录的归入「未投递」列 */
 export default function Board() {
   const qc = useQueryClient();
   const nav = useNavigate();
@@ -50,57 +53,56 @@ export default function Board() {
     if (col !== from) doMove(appId, from, col);
   };
 
-  const jobOf = useMemo(() => {
-    const m = new Map<string, Job>();
-    jobs.data?.items.forEach((j) => m.set(j.id, j));
-    return m;
-  }, [jobs.data]);
+  // job_id → 最新投递记录：契约不暴露 created_at，但列表按 seq 升序返回，后出现的即最新
+  const cards = useMemo<BoardCard[]>(() => {
+    const latest = new Map<string, Application>();
+    (apps.data?.items ?? []).forEach((a) => latest.set(a.job_id, a));
+    return (jobs.data?.items ?? []).map((job) => ({ job, app: latest.get(job.id) ?? null }));
+  }, [jobs.data, apps.data]);
 
   const filtered = useMemo(() => {
-    let items = apps.data?.items ?? [];
-    if (channel) items = items.filter((a) => jobOf.get(a.job_id)?.channel === channel);
+    let items = cards;
+    if (channel) items = items.filter((c) => c.job.channel === channel);
     if (keyword) {
       const kw = keyword.toLowerCase();
-      items = items.filter((a) => {
-        const j = jobOf.get(a.job_id);
-        return j?.company.toLowerCase().includes(kw) || j?.title.toLowerCase().includes(kw);
-      });
+      items = items.filter((c) =>
+        c.job.company.toLowerCase().includes(kw) || c.job.title.toLowerCase().includes(kw));
     }
     return items;
-  }, [apps.data, channel, keyword, jobOf]);
+  }, [cards, channel, keyword]);
 
   const channels = useMemo(() => [...new Set((jobs.data?.items ?? []).map((j) => j.channel).filter(Boolean))] as string[], [jobs.data]);
 
   if (jobs.isLoading || apps.isLoading) return <Skeleton lines={5} />;
   if (jobs.isError || apps.isError) return <EmptyState icon="⚠️" text="看板数据加载失败，请确认后端已启动（或使用 ?mock=1 查看演示）。" />;
 
-  const allApps = apps.data?.items ?? [];
-
-  const colCard = (a: Application) => {
-    const j = jobOf.get(a.job_id);
-    const dLeft = daysUntil(j?.deadline);
+  const colCard = (c: BoardCard) => {
+    const { job: j, app: a } = c;
+    const dLeft = daysUntil(j.deadline);
     return (
       <div
-        key={a.id}
+        key={j.id}
         className="card board-card"
-        draggable
-        onDragStart={(e) => {
+        // 未投递卡片本期只读：不挂 draggable 与拖回数据
+        draggable={a !== null}
+        onDragStart={a ? (e) => {
           e.dataTransfer.setData('text/app-id', a.id);
           e.dataTransfer.setData('text/app-status', a.status);
           e.currentTarget.classList.add('dragging');
-        }}
-        onDragEnd={(e) => e.currentTarget.classList.remove('dragging')}
+        } : undefined}
+        onDragEnd={a ? (e) => e.currentTarget.classList.remove('dragging') : undefined}
       >
-        <div className="company">{j?.company ?? '未知公司'}</div>
-        <div>{j?.title ?? '未知岗位'}</div>
+        <div className="company">{j.company || '未知公司'}</div>
+        <div>{j.title || '未知岗位'}</div>
         {/* AC-8：地点/渠道/截止空值给默认文案 */}
-        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>{j?.location ?? '地点未填'}</div>
+        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>{j.location ?? '地点未填'}</div>
         <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-          {j?.channel
+          {a === null && <span className="badge" style={{ background: 'var(--st-closed-bg)', color: 'var(--color-text-secondary)' }}>未投递</span>}
+          {j.channel
             ? <span className="badge" style={{ background: 'var(--st-pending-bg)', color: 'var(--st-pending)' }}>{j.channel}</span>
             : <span className="badge" style={{ background: 'var(--st-closed-bg)', color: 'var(--color-text-disabled)' }}>渠道未填</span>}
-          {a.status === '面试' && a.interview_round && <span className="badge" style={{ background: 'var(--st-interview-bg)', color: 'var(--st-interview)' }}>面试·{['一', '二', '三', '四', '五'][a.interview_round - 1] ?? a.interview_round}面</span>}
-          {!isTerminal(a.status) && a.status === '待投递' && (dLeft !== null ? (
+          {a?.status === '面试' && a.interview_round && <span className="badge" style={{ background: 'var(--st-interview-bg)', color: 'var(--st-interview)' }}>面试·{['一', '二', '三', '四', '五'][a.interview_round - 1] ?? a.interview_round}面</span>}
+          {(a === null || (!isTerminal(a.status) && a.status === '待投递')) && (dLeft !== null ? (
             <span className="badge num" style={dLeft <= 3 ? { background: 'var(--st-written-bg)', color: 'var(--color-warning)' } : { background: 'var(--st-pending-bg)', color: 'var(--color-text-secondary)' }}>
               {dLeft < 0 ? '已截止' : `截止 ${dLeft} 天`}
             </span>
@@ -108,7 +110,7 @@ export default function Board() {
             <span className="badge" style={{ background: 'var(--st-closed-bg)', color: 'var(--color-text-disabled)' }}>截止未定</span>
           ))}
         </div>
-        <Link to={`/jobs/${a.job_id}`} style={{ fontSize: 12, display: 'inline-block', marginTop: 6 }}>详情 →</Link>
+        <Link to={`/jobs/${j.id}`} style={{ fontSize: 12, display: 'inline-block', marginTop: 6 }}>详情 →</Link>
       </div>
     );
   };
@@ -125,12 +127,17 @@ export default function Board() {
         </select>
       </div>
 
-      {allApps.length === 0 ? (
-        <EmptyState icon="🗂️" text="还没有投递记录" action={<button className="btn-primary" onClick={() => setShowCreate(true)}>录入第一个岗位</button>} />
+      {cards.length === 0 ? (
+        <EmptyState icon="🗂️" text="还没有岗位记录" action={<button className="btn-primary" onClick={() => setShowCreate(true)}>录入第一个岗位</button>} />
       ) : (
         <div className="board">
+          {/* 未投递列：无投递记录的岗位，只读展示（非拖拽目标） */}
+          <div className="board-col">
+            <div className="board-col-title" style={{ color: 'var(--color-text-secondary)' }}><span>未投递</span><span className="num">{filtered.filter((c) => c.app === null).length}</span></div>
+            {filtered.filter((c) => c.app === null).map(colCard)}
+          </div>
           {BOARD_COLUMNS.map((col) => {
-            const items = filtered.filter((a) => a.status === col);
+            const items = filtered.filter((c) => c.app?.status === col);
             const c = statusColor(col);
             return (
               <div key={col} className={`board-col ${dragOver === col ? 'drag-over' : ''}`}
@@ -146,8 +153,8 @@ export default function Board() {
             onDragOver={(e) => { e.preventDefault(); setDragOver('已结束'); }}
             onDragLeave={() => setDragOver(null)}
             onDrop={onDropTo('已结束')}>
-            <div className="board-col-title" style={{ color: 'var(--st-closed)' }}><span>已结束</span><span className="num">{filtered.filter((a) => isTerminal(a.status)).length}</span></div>
-            {filtered.filter((a) => isTerminal(a.status)).map(colCard)}
+            <div className="board-col-title" style={{ color: 'var(--st-closed)' }}><span>已结束</span><span className="num">{filtered.filter((c) => c.app !== null && isTerminal(c.app.status)).length}</span></div>
+            {filtered.filter((c) => c.app !== null && isTerminal(c.app.status)).map(colCard)}
           </div>
         </div>
       )}
