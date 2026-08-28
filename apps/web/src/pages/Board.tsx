@@ -4,12 +4,21 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, type Application, type ApplicationStatus, type Job } from '../api';
 import Modal from '../components/Modal';
 import { EmptyState, Skeleton } from '../components/Feedback';
-import { BOARD_CLOSED, BOARD_COLUMNS, isTerminal, statusColor } from '../utils/status';
+import { MAIN_CHAIN, SIDE_TERMINAL, TERMINAL_OK, manualTargets, statusColor } from '../utils/status';
 import { daysUntil } from '../utils/time';
 
 interface UndoState { appId: string; from: ApplicationStatus; to: ApplicationStatus }
 
-/** D-04 岗位看板（FR-10/11/12，BR-3/10/11） */
+/** 看板卡片：以岗位为主键；app 为该岗位最新投递记录（无 → 展示层视为「待投递」） */
+interface BoardCard { job: Job; app: Application | null }
+
+/** 状态过滤器选项：主链 5 态 + 终止态 */
+const ALL_STATUSES: ApplicationStatus[] = [...MAIN_CHAIN, ...TERMINAL_OK, ...SIDE_TERMINAL];
+
+/** 卡片有效状态：无投递记录 → 展示层「待投递」（不写数据） */
+const effStatus = (c: BoardCard): ApplicationStatus => c.app?.status ?? '待投递';
+
+/** D-04 岗位看板（FR-10/11/12，BR-3/10/11）：全部岗位平铺，状态以卡片标签展示，支持状态多选过滤 */
 export default function Board() {
   const qc = useQueryClient();
   const nav = useNavigate();
@@ -19,10 +28,10 @@ export default function Board() {
   const [showCreate, setShowCreate] = useState(false);
   const [keyword, setKeyword] = useState('');
   const [channel, setChannel] = useState('');
+  const [statusSel, setStatusSel] = useState<ApplicationStatus[]>([]);
+  const [statusOpen, setStatusOpen] = useState(false);
   const [undo, setUndo] = useState<UndoState | null>(null);
-  const [closedPick, setClosedPick] = useState<string | null>(null); // appId 待选终止态
   const undoTimer = useRef<ReturnType<typeof setTimeout>>();
-  const [dragOver, setDragOver] = useState<string | null>(null);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['applications'] });
 
@@ -34,73 +43,57 @@ export default function Board() {
 
   const doMove = (appId: string, from: ApplicationStatus, to: ApplicationStatus) => {
     moveMut.mutate({ id: appId, status: to });
-    // 拖拽即改 + 可撤销 toast 5s（Leader 拍板 §9-3）
+    // 改状态即生效 + 可撤销 toast 5s（Leader 拍板 §9-3）
     clearTimeout(undoTimer.current);
     setUndo({ appId, from, to });
     undoTimer.current = setTimeout(() => setUndo(null), 5000);
   };
 
-  const onDropTo = (col: ApplicationStatus | '已结束') => (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(null);
-    const appId = e.dataTransfer.getData('text/app-id');
-    const from = e.dataTransfer.getData('text/app-status') as ApplicationStatus;
-    if (!appId || !from) return;
-    if (col === '已结束') { setClosedPick(appId); return; }
-    if (col !== from) doMove(appId, from, col);
-  };
+  const toggleStatus = (s: ApplicationStatus) =>
+    setStatusSel((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]));
 
-  const jobOf = useMemo(() => {
-    const m = new Map<string, Job>();
-    jobs.data?.items.forEach((j) => m.set(j.id, j));
-    return m;
-  }, [jobs.data]);
+  // job_id → 最新投递记录：契约不暴露 created_at，但列表按 seq 升序返回，后出现的即最新
+  const cards = useMemo<BoardCard[]>(() => {
+    const latest = new Map<string, Application>();
+    (apps.data?.items ?? []).forEach((a) => latest.set(a.job_id, a));
+    return (jobs.data?.items ?? []).map((job) => ({ job, app: latest.get(job.id) ?? null }));
+  }, [jobs.data, apps.data]);
 
   const filtered = useMemo(() => {
-    let items = apps.data?.items ?? [];
-    if (channel) items = items.filter((a) => jobOf.get(a.job_id)?.channel === channel);
+    let items = cards;
+    if (channel) items = items.filter((c) => c.job.channel === channel);
+    if (statusSel.length > 0) items = items.filter((c) => statusSel.includes(effStatus(c)));
     if (keyword) {
       const kw = keyword.toLowerCase();
-      items = items.filter((a) => {
-        const j = jobOf.get(a.job_id);
-        return j?.company.toLowerCase().includes(kw) || j?.title.toLowerCase().includes(kw);
-      });
+      items = items.filter((c) =>
+        c.job.company.toLowerCase().includes(kw) || c.job.title.toLowerCase().includes(kw));
     }
     return items;
-  }, [apps.data, channel, keyword, jobOf]);
+  }, [cards, channel, statusSel, keyword]);
 
   const channels = useMemo(() => [...new Set((jobs.data?.items ?? []).map((j) => j.channel).filter(Boolean))] as string[], [jobs.data]);
 
   if (jobs.isLoading || apps.isLoading) return <Skeleton lines={5} />;
   if (jobs.isError || apps.isError) return <EmptyState icon="⚠️" text="看板数据加载失败，请确认后端已启动（或使用 ?mock=1 查看演示）。" />;
 
-  const allApps = apps.data?.items ?? [];
-
-  const colCard = (a: Application) => {
-    const j = jobOf.get(a.job_id);
-    const dLeft = daysUntil(j?.deadline);
+  const colCard = (c: BoardCard) => {
+    const { job: j, app: a } = c;
+    const dLeft = daysUntil(j.deadline);
+    const st = effStatus(c);
+    const sc = statusColor(st);
     return (
-      <div
-        key={a.id}
-        className="card board-card"
-        draggable
-        onDragStart={(e) => {
-          e.dataTransfer.setData('text/app-id', a.id);
-          e.dataTransfer.setData('text/app-status', a.status);
-          e.currentTarget.classList.add('dragging');
-        }}
-        onDragEnd={(e) => e.currentTarget.classList.remove('dragging')}
-      >
-        <div className="company">{j?.company ?? '未知公司'}</div>
-        <div>{j?.title ?? '未知岗位'}</div>
+      <div key={j.id} className="card board-card">
+        <div className="company">{j.company || '未知公司'}</div>
+        <div>{j.title || '未知岗位'}</div>
         {/* AC-8：地点/渠道/截止空值给默认文案 */}
-        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>{j?.location ?? '地点未填'}</div>
+        <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>{j.location ?? '地点未填'}</div>
         <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-          {j?.channel
+          <span className="badge" style={{ background: sc.bg, color: sc.fg }}>{st}</span>
+          {j.channel
             ? <span className="badge" style={{ background: 'var(--st-pending-bg)', color: 'var(--st-pending)' }}>{j.channel}</span>
             : <span className="badge" style={{ background: 'var(--st-closed-bg)', color: 'var(--color-text-disabled)' }}>渠道未填</span>}
-          {a.status === '面试' && a.interview_round && <span className="badge" style={{ background: 'var(--st-interview-bg)', color: 'var(--st-interview)' }}>面试·{['一', '二', '三', '四', '五'][a.interview_round - 1] ?? a.interview_round}面</span>}
-          {!isTerminal(a.status) && a.status === '待投递' && (dLeft !== null ? (
+          {a?.status === '面试' && a.interview_round && <span className="badge" style={{ background: 'var(--st-interview-bg)', color: 'var(--st-interview)' }}>面试·{['一', '二', '三', '四', '五'][a.interview_round - 1] ?? a.interview_round}面</span>}
+          {(a === null || a.status === '待投递') && (dLeft !== null ? (
             <span className="badge num" style={dLeft <= 3 ? { background: 'var(--st-written-bg)', color: 'var(--color-warning)' } : { background: 'var(--st-pending-bg)', color: 'var(--color-text-secondary)' }}>
               {dLeft < 0 ? '已截止' : `截止 ${dLeft} 天`}
             </span>
@@ -108,7 +101,20 @@ export default function Board() {
             <span className="badge" style={{ background: 'var(--st-closed-bg)', color: 'var(--color-text-disabled)' }}>截止未定</span>
           ))}
         </div>
-        <Link to={`/jobs/${a.job_id}`} style={{ fontSize: 12, display: 'inline-block', marginTop: 6 }}>详情 →</Link>
+        <div style={{ display: 'flex', gap: 12, marginTop: 6, alignItems: 'center' }}>
+          <Link to={`/jobs/${j.id}`} style={{ fontSize: 12 }}>详情 →</Link>
+          {/* 无投递记录的卡片只读：无 application 可改，不提供改状态入口 */}
+          {a && (
+            <select
+              aria-label="修改状态"
+              value={a.status}
+              onChange={(e) => doMove(a.id, a.status, e.target.value as ApplicationStatus)}
+              style={{ fontSize: 12, marginLeft: 'auto' }}
+            >
+              {[a.status, ...manualTargets(a.status)].map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          )}
+        </div>
       </div>
     );
   };
@@ -123,36 +129,33 @@ export default function Board() {
           <option value="">全部渠道</option>
           {channels.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
+        <div className="filter-pop-wrap">
+          <button aria-expanded={statusOpen} onClick={() => setStatusOpen((v) => !v)}>
+            状态筛选{statusSel.length > 0 ? `（${statusSel.length}）` : ''}
+          </button>
+          {statusOpen && (
+            <div className="filter-pop" role="group" aria-label="状态筛选选项">
+              {ALL_STATUSES.map((s) => {
+                const sc = statusColor(s);
+                return (
+                  <label key={s} className="filter-pop-item">
+                    <input type="checkbox" checked={statusSel.includes(s)} onChange={() => toggleStatus(s)} />
+                    <span className="badge" style={{ background: sc.bg, color: sc.fg }}>{s}</span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
-      {allApps.length === 0 ? (
-        <EmptyState icon="🗂️" text="还没有投递记录" action={<button className="btn-primary" onClick={() => setShowCreate(true)}>录入第一个岗位</button>} />
+      {cards.length === 0 ? (
+        <EmptyState icon="🗂️" text="还没有岗位记录" action={<button className="btn-primary" onClick={() => setShowCreate(true)}>录入第一个岗位</button>} />
       ) : (
-        <div className="board">
-          {BOARD_COLUMNS.map((col) => {
-            const items = filtered.filter((a) => a.status === col);
-            const c = statusColor(col);
-            return (
-              <div key={col} className={`board-col ${dragOver === col ? 'drag-over' : ''}`}
-                onDragOver={(e) => { e.preventDefault(); setDragOver(col); }}
-                onDragLeave={() => setDragOver(null)}
-                onDrop={onDropTo(col)}>
-                <div className="board-col-title" style={{ color: c.fg }}><span>{col}</span><span className="num">{items.length}</span></div>
-                {items.map(colCard)}
-              </div>
-            );
-          })}
-          <div className={`board-col ${dragOver === '已结束' ? 'drag-over' : ''}`}
-            onDragOver={(e) => { e.preventDefault(); setDragOver('已结束'); }}
-            onDragLeave={() => setDragOver(null)}
-            onDrop={onDropTo('已结束')}>
-            <div className="board-col-title" style={{ color: 'var(--st-closed)' }}><span>已结束</span><span className="num">{filtered.filter((a) => isTerminal(a.status)).length}</span></div>
-            {filtered.filter((a) => isTerminal(a.status)).map(colCard)}
-          </div>
-        </div>
+        <div className="board">{filtered.map(colCard)}</div>
       )}
 
-      {/* 可撤销 toast（拖拽即改，5s） */}
+      {/* 可撤销 toast（改状态即生效，5s） */}
       {undo && (
         <div className="card fade-in" style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', padding: '10px 16px', display: 'flex', gap: 12, alignItems: 'center', zIndex: 60 }}>
           <span>状态已更新：{undo.from} → {undo.to}（来源：手动）</span>
@@ -162,21 +165,6 @@ export default function Board() {
             setUndo(null);
           }}>撤销</button>
         </div>
-      )}
-
-      {/* 拖入已结束 → 选择具体终止态 */}
-      {closedPick && (
-        <Modal title="选择终止状态" onClose={() => setClosedPick(null)}>
-          <div style={{ display: 'grid', gap: 8 }}>
-            {BOARD_CLOSED.map((s) => (
-              <button key={s} onClick={() => {
-                const from = (apps.data?.items.find((a) => a.id === closedPick)?.status) ?? '待投递';
-                doMove(closedPick, from, s);
-                setClosedPick(null);
-              }}>{s}</button>
-            ))}
-          </div>
-        </Modal>
       )}
 
       {showCreate && <CreateJobModal onClose={() => setShowCreate(false)} />}
