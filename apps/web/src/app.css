@@ -72,14 +72,15 @@
 /* 待确认卡（warning 左边条） */
 .pending-card { border-left: 4px solid var(--color-warning); padding: 12px 16px; display: flex; align-items: center; gap: 16px; }
 
-/* 看板 */
-.board { display: flex; gap: 12px; overflow-x: auto; align-items: flex-start; padding-bottom: 16px; }
-.board-col { min-width: 220px; width: 220px; flex-shrink: 0; background: var(--color-bg); border-radius: var(--radius-card); padding: 8px; }
-.board-col.drag-over { outline: 2px dashed var(--color-primary); }
-.board-col-title { font-weight: 600; padding: 6px 8px; display: flex; justify-content: space-between; }
-.board-card { padding: 12px; margin: 8px 0; cursor: grab; }
+/* 看板：全部岗位平铺（网格） */
+.board { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; padding-bottom: 16px; }
+.board-card { padding: 12px; }
 .board-card .company { font-size: 16px; font-weight: 600; }
-.board-card.dragging { opacity: .5; }
+
+/* 状态多选筛选弹层 */
+.filter-pop-wrap { position: relative; }
+.filter-pop { position: absolute; top: calc(100% + 4px); left: 0; z-index: 40; background: var(--color-surface, #fff); border: 1px solid var(--color-border); border-radius: var(--radius-ctl); padding: 8px; display: grid; gap: 4px; min-width: 160px; box-shadow: 0 4px 16px rgba(0,0,0,.08); }
+.filter-pop-item { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
 
 /* 详情页 */
 .detail-grid { display: grid; grid-template-columns: 1fr 300px; gap: 24px; align-items: start; }
